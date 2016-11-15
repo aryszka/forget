@@ -1,4 +1,4 @@
-.PHONY: check
+.PHONY: build check precommit
 
 default: build
 
@@ -15,6 +15,9 @@ check: build
 
 checkshort: build
 	go test -test.short
+
+bench: build
+	go test -cpuprofile cpu.out -memprofile mem.out -bench .
 
 cover: check
 	go tool cover -func cover.out
