@@ -13,6 +13,9 @@ install:
 check: build
 	go test -coverprofile cover.out
 
+checkshort: build
+	go test -test.short
+
 cover: check
 	go tool cover -func cover.out
 

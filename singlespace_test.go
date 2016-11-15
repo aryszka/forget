@@ -286,7 +286,6 @@ func TestClose(t *testing.T) {
 	c.Set("baz", []byte{7, 8, 9}, time.Hour)
 	c.Del("foo")
 	c.Size()
-	c.Close()
 }
 
 func TestExpiration(t *testing.T) {

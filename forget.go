@@ -40,9 +40,9 @@ type message struct {
 }
 
 type Cache struct {
-	cache *cache
-	req   chan message
-	quit  chan struct{}
+	cache        *cache
+	req          chan message
+	quit, closed chan struct{}
 }
 
 type SingleSpace struct {
@@ -70,13 +70,15 @@ func (c *cache) remove(keySpace, key string) *entry {
 		delete(c.spaces, keySpace)
 	} else {
 		if space.lru == e {
-			space.lru = e.moreRecent
+			space.lru, e.moreRecent.lessRecent = e.moreRecent, nil
 		} else {
 			e.lessRecent.moreRecent = e.moreRecent
 		}
 
 		if space.mru == e {
-			space.mru = e.lessRecent
+			space.mru, e.lessRecent.moreRecent = e.lessRecent, nil
+		} else {
+			e.moreRecent.lessRecent = e.lessRecent
 		}
 	}
 
@@ -132,9 +134,9 @@ func (c *cache) append(e *entry) {
 
 	e.moreRecent = nil
 	if space.lru == nil {
-		space.lru, space.mru, e.lessRecent = e, e, nil
+		space.lru, space.mru, e.lessRecent, e.moreRecent = e, e, nil, nil
 	} else {
-		space.mru.moreRecent, space.mru, e.lessRecent = e, e, space.mru
+		space.mru.moreRecent, space.mru, e.lessRecent, e.moreRecent = e, e, space.mru, nil
 	}
 }
 
@@ -191,8 +193,9 @@ func New(maxSize int) *Cache {
 			available: maxSize,
 			spaces:    make(map[string]*keySpace),
 		},
-		req:  make(chan message),
-		quit: make(chan struct{}),
+		req:    make(chan message),
+		quit:   make(chan struct{}),
+		closed: make(chan struct{}),
 	}
 
 	go c.run()
@@ -224,6 +227,7 @@ func (c *Cache) run() {
 				panic("invalid mesasge type")
 			}
 		case <-c.quit:
+			close(c.closed)
 			return
 		}
 	}
@@ -281,11 +285,8 @@ func (c *Cache) Len() int {
 }
 
 func (c *Cache) Close() {
-	select {
-	case <-c.quit:
-	default:
-		close(c.quit)
-	}
+	close(c.quit)
+	<-c.closed
 }
 
 func NewSingleSpace(maxSize int) *SingleSpace {
