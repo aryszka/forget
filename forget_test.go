@@ -12,13 +12,13 @@ type testDataItem struct {
 	data []byte
 }
 
-func initForget(d map[string][]byte) *Forget {
-	f := New(1 << 9)
+func initForget(d map[string][]byte) *SingleSpace {
+	c := NewSingleSpace(1 << 9)
 	for k, dk := range d {
-		f.Set(k, dk, time.Hour)
+		c.Set(k, dk, time.Hour)
 	}
 
-	return f
+	return c
 }
 
 func TestGet(t *testing.T) {
@@ -54,10 +54,10 @@ func TestGet(t *testing.T) {
 		},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			f := initForget(ti.init)
-			defer f.Close()
+			c := initForget(ti.init)
+			defer c.Close()
 
-			d, ok := f.Get(ti.key)
+			d, ok := c.Get(ti.key)
 
 			if ok != ti.ok {
 				t.Error("unexpected response status", ok, ti.ok)
@@ -139,16 +139,16 @@ func TestSet(t *testing.T) {
 		}},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			f := initForget(ti.init)
-			defer f.Close()
+			c := initForget(ti.init)
+			defer c.Close()
 
-			f.Set(ti.key, ti.data, time.Hour)
-			for _, c := range ti.checks {
-				if d, ok := f.Get(c.key); ok != c.ok {
-					t.Error("unexpected response status", ok, c.ok)
+			c.Set(ti.key, ti.data, time.Hour)
+			for _, chk := range ti.checks {
+				if d, ok := c.Get(chk.key); ok != chk.ok {
+					t.Error("unexpected response status", ok, chk.ok)
 					return
-				} else if !bytes.Equal(d, c.data) {
-					t.Error("invalid response data", d, c.data)
+				} else if !bytes.Equal(d, chk.data) {
+					t.Error("invalid response data", d, chk.data)
 				}
 			}
 		})
@@ -156,10 +156,10 @@ func TestSet(t *testing.T) {
 }
 
 func TestOverSize(t *testing.T) {
-	f := New(4)
-	defer f.Close()
-	f.Set("foo", []byte{1, 2, 3}, time.Hour)
-	if _, ok := f.Get("foo"); ok {
+	c := NewSingleSpace(4)
+	defer c.Close()
+	c.Set("foo", []byte{1, 2, 3}, time.Hour)
+	if _, ok := c.Get("foo"); ok {
 		t.Error("failed to reject oversized data")
 	}
 }
@@ -211,16 +211,16 @@ func TestDelete(t *testing.T) {
 		}},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			f := initForget(ti.init)
-			defer f.Close()
+			c := initForget(ti.init)
+			defer c.Close()
 
-			f.Del(ti.key)
-			for _, c := range ti.checks {
-				if d, ok := f.Get(c.key); ok != c.ok {
-					t.Error("unexpected response status", ok, c.ok)
+			c.Del(ti.key)
+			for _, chk := range ti.checks {
+				if d, ok := c.Get(chk.key); ok != chk.ok {
+					t.Error("unexpected response status", ok, chk.ok)
 					return
-				} else if !bytes.Equal(d, c.data) {
-					t.Error("invalid response data", d, c.data)
+				} else if !bytes.Equal(d, chk.data) {
+					t.Error("invalid response data", d, chk.data)
 				}
 			}
 		})
@@ -248,14 +248,14 @@ func TestSizeLen(t *testing.T) {
 		2,
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			f := initForget(ti.init)
-			defer f.Close()
+			c := initForget(ti.init)
+			defer c.Close()
 
-			if s := f.Size(); s != ti.expectSize {
+			if s := c.Size(); s != ti.expectSize {
 				t.Error("invalid size", s, ti.expectSize)
 			}
 
-			if s := f.Len(); s != ti.expectLen {
+			if s := c.Len(); s != ti.expectLen {
 				t.Error("invalid len", s, ti.expectLen)
 			}
 		})
@@ -263,32 +263,32 @@ func TestSizeLen(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	f := initForget(map[string][]byte{
+	c := initForget(map[string][]byte{
 		"foo": []byte{1, 2, 3},
 		"bar": []byte{4, 5, 6},
 	})
-	f.Close()
+	c.Close()
 
-	if _, ok := f.Get("foo"); ok {
+	if _, ok := c.Get("foo"); ok {
 		t.Error("failed to close cache")
 	}
 
-	f.Set("baz", []byte{7, 8, 9}, time.Hour)
-	f.Del("foo")
-	f.Size()
-	f.Close()
+	c.Set("baz", []byte{7, 8, 9}, time.Hour)
+	c.Del("foo")
+	c.Size()
+	c.Close()
 }
 
 func TestExpiration(t *testing.T) {
-	f := New(1 << 9)
-	defer f.Close()
+	c := NewSingleSpace(1 << 9)
+	defer c.Close()
 
-	f.Set("foo", []byte{1, 2, 3}, 24*time.Millisecond)
+	c.Set("foo", []byte{1, 2, 3}, 24*time.Millisecond)
 
 	time.Sleep(12 * time.Millisecond)
-	f.Get("foo")
+	c.Get("foo")
 	time.Sleep(24 * time.Millisecond)
-	if _, ok := f.Get("foo"); ok {
+	if _, ok := c.Get("foo"); ok {
 		t.Error("failed to expire item")
 	}
 }

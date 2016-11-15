@@ -3,54 +3,81 @@ package forget
 import "time"
 
 type entry struct {
-	key                    string
+	keySpace, key          string
 	data                   []byte
 	expiration             time.Time
 	lessRecent, moreRecent *entry
 }
 
+type keySpace struct {
+	lookup   map[string]*entry
+	lru, mru *entry
+}
+
 type cache struct {
 	maxSize, available int
-	lookup             map[string]*entry
-	lru, mru           *entry
+	spaces             map[string]*keySpace
 }
+
+type messageType int
+
+const (
+	getmsg messageType = iota
+	setmsg
+	delmsg
+	sizemsg
+	lenmsg
+)
 
 type message struct {
-	response  chan message
-	ok        bool
-	key       string
-	data      []byte
-	ttl       time.Duration
-	size, len int
+	typ           messageType
+	response      chan message
+	ok            bool
+	keySpace, key string
+	data          []byte
+	ttl           time.Duration
+	size, len     int
 }
 
-type Forget struct {
-	cache                    *cache
-	get, set, del, size, len chan message
-	quit                     chan struct{}
+type Cache struct {
+	cache *cache
+	req   chan message
+	quit  chan struct{}
+}
+
+type SingleSpace struct {
+	cache *Cache
 }
 
 func (e *entry) size() int {
-	return len(e.key) + len(e.data)
+	return len(e.keySpace) + len(e.key) + len(e.data)
 }
 
-func (c *cache) remove(key string) *entry {
-	e, ok := c.lookup[key]
+func (c *cache) remove(keySpace, key string) *entry {
+	space, ok := c.spaces[keySpace]
+	if !ok {
+		return nil
+	}
+
+	e, ok := space.lookup[key]
 	if !ok {
 		return nil
 	}
 
 	c.available += e.size()
-	delete(c.lookup, key)
-
-	if c.lru == e {
-		c.lru = e.moreRecent
+	delete(space.lookup, key)
+	if len(space.lookup) == 0 {
+		delete(c.spaces, keySpace)
 	} else {
-		e.lessRecent.moreRecent = e.moreRecent
-	}
+		if space.lru == e {
+			space.lru = e.moreRecent
+		} else {
+			e.lessRecent.moreRecent = e.moreRecent
+		}
 
-	if c.mru == e {
-		c.mru = e.lessRecent
+		if space.mru == e {
+			space.mru = e.lessRecent
+		}
 	}
 
 	return e
@@ -59,22 +86,60 @@ func (c *cache) remove(key string) *entry {
 func (c *cache) append(e *entry) {
 	s := e.size()
 	c.available -= s
+
+	var (
+		spaces  []*keySpace
+		counter int
+	)
+
 	for c.available < 0 {
-		c.del(c.lru.key)
+		if space, ok := c.spaces[e.keySpace]; ok {
+			c.remove(space.lru.keySpace, space.lru.key)
+		} else {
+			if len(spaces) == 0 {
+				spaces = make([]*keySpace, 0, len(c.spaces)-1)
+				for k, s := range c.spaces {
+					if k != e.keySpace {
+						spaces = append(spaces, s)
+					}
+				}
+			}
+
+			var space *keySpace
+			for space == nil || len(space.lookup) == 0 {
+				if space != nil {
+					spaces = append(spaces[:counter], spaces[counter+1:]...)
+					counter %= len(spaces)
+				}
+
+				space = spaces[counter]
+			}
+
+			lru := space.lru
+			c.remove(lru.keySpace, lru.key)
+			counter++
+			counter %= len(spaces)
+		}
 	}
 
-	c.lookup[e.key] = e
+	space, ok := c.spaces[e.keySpace]
+	if !ok {
+		space = &keySpace{lookup: make(map[string]*entry)}
+		c.spaces[e.keySpace] = space
+	}
+
+	space.lookup[e.key] = e
 
 	e.moreRecent = nil
-	if c.lru == nil {
-		c.lru, c.mru, e.lessRecent = e, e, nil
+	if space.lru == nil {
+		space.lru, space.mru, e.lessRecent = e, e, nil
 	} else {
-		c.mru.moreRecent, c.mru, e.lessRecent = e, e, c.mru
+		space.mru.moreRecent, space.mru, e.lessRecent = e, e, space.mru
 	}
 }
 
-func (c *cache) get(key string) ([]byte, bool) {
-	e := c.remove(key)
+func (c *cache) get(keySpace, key string) ([]byte, bool) {
+	e := c.remove(keySpace, key)
 	if e == nil {
 		return nil, false
 	}
@@ -87,10 +152,10 @@ func (c *cache) get(key string) ([]byte, bool) {
 	return e.data, true
 }
 
-func (c *cache) set(key string, data []byte, ttl time.Duration) {
-	e := c.remove(key)
+func (c *cache) set(keySpace, key string, data []byte, ttl time.Duration) {
+	e := c.remove(keySpace, key)
 	if e == nil {
-		e = &entry{key: key}
+		e = &entry{keySpace: keySpace, key: key}
 	}
 
 	e.data = data
@@ -102,8 +167,8 @@ func (c *cache) set(key string, data []byte, ttl time.Duration) {
 	c.append(e)
 }
 
-func (c *cache) del(key string) {
-	c.remove(key)
+func (c *cache) del(keySpace, key string) {
+	c.remove(keySpace, key)
 }
 
 func (c *cache) size() int {
@@ -111,107 +176,144 @@ func (c *cache) size() int {
 }
 
 func (c *cache) len() int {
-	return len(c.lookup)
+	l := 0
+	for _, s := range c.spaces {
+		l += len(s.lookup)
+	}
+
+	return l
 }
 
-func New(maxSize int) *Forget {
-	f := &Forget{
+func New(maxSize int) *Cache {
+	c := &Cache{
 		cache: &cache{
 			maxSize:   maxSize,
 			available: maxSize,
-			lookup:    make(map[string]*entry),
+			spaces:    make(map[string]*keySpace),
 		},
-		get:  make(chan message),
-		set:  make(chan message),
-		del:  make(chan message),
-		size: make(chan message),
-		len:  make(chan message),
+		req:  make(chan message),
 		quit: make(chan struct{}),
 	}
 
-	go f.run()
-	return f
+	go c.run()
+	return c
 }
 
-func (f *Forget) run() {
+func (c *Cache) run() {
 	for {
-		var rsp message
 		select {
-		case req := <-f.get:
-			rsp.data, rsp.ok = f.cache.get(req.key)
-			f.response(req, rsp)
-		case req := <-f.set:
-			f.cache.set(req.key, req.data, req.ttl)
-			f.response(req, rsp)
-		case req := <-f.del:
-			f.cache.del(req.key)
-			f.response(req, rsp)
-		case req := <-f.size:
-			rsp.size = f.cache.size()
-			f.response(req, rsp)
-		case req := <-f.len:
-			rsp.len = f.cache.len()
-			f.response(req, rsp)
-		case <-f.quit:
+		case req := <-c.req:
+			var rsp message
+			switch req.typ {
+			case getmsg:
+				rsp.data, rsp.ok = c.cache.get(req.keySpace, req.key)
+				c.response(req, rsp)
+			case setmsg:
+				c.cache.set(req.keySpace, req.key, req.data, req.ttl)
+				c.response(req, rsp)
+			case delmsg:
+				c.cache.del(req.keySpace, req.key)
+				c.response(req, rsp)
+			case sizemsg:
+				rsp.size = c.cache.size()
+				c.response(req, rsp)
+			case lenmsg:
+				rsp.len = c.cache.len()
+				c.response(req, rsp)
+			default:
+				panic("invalid mesasge type")
+			}
+		case <-c.quit:
 			return
 		}
 	}
 }
 
-func (f *Forget) request(c chan<- message, req message) message {
+func (c *Cache) request(req message) message {
 	req.response = make(chan message)
 
 	select {
-	case c <- req:
-	case <-f.quit:
+	case c.req <- req:
+	case <-c.quit:
 		return message{}
 	}
 
 	select {
 	case rsp := <-req.response:
 		return rsp
-	case <-f.quit:
+	case <-c.quit:
 		return message{}
 	}
 }
 
-func (f *Forget) response(req, rsp message) {
+func (c *Cache) response(req, rsp message) {
 	select {
-	case <-f.quit:
+	case <-c.quit:
 		return
 	default:
 		req.response <- rsp
 	}
 }
 
-func (f *Forget) Get(key string) ([]byte, bool) {
-	rsp := f.request(f.get, message{key: key})
+func (c *Cache) Get(keySpace, key string) ([]byte, bool) {
+	rsp := c.request(message{typ: getmsg, keySpace: keySpace, key: key})
 	return rsp.data, rsp.ok
-
 }
 
-func (f *Forget) Set(key string, data []byte, ttl time.Duration) {
-	f.request(f.set, message{key: key, data: data, ttl: ttl})
+func (c *Cache) Set(keySpace, key string, data []byte, ttl time.Duration) {
+	c.request(message{typ: setmsg, keySpace: keySpace, key: key, data: data, ttl: ttl})
 }
 
-func (f *Forget) Del(key string) {
-	f.request(f.del, message{key: key})
+func (c *Cache) Del(keySpace, key string) {
+	c.request(message{typ: delmsg, keySpace: keySpace, key: key})
 }
 
-func (f *Forget) Size() int {
-	rsp := f.request(f.size, message{})
+// TODO: handle key spaces
+func (c *Cache) Size() int {
+	rsp := c.request(message{typ: sizemsg})
 	return rsp.size
 }
 
-func (f *Forget) Len() int {
-	rsp := f.request(f.len, message{})
+// TODO: handle key spaces
+func (c *Cache) Len() int {
+	rsp := c.request(message{typ: lenmsg})
 	return rsp.len
 }
 
-func (f *Forget) Close() {
+func (c *Cache) Close() {
 	select {
-	case <-f.quit:
+	case <-c.quit:
 	default:
-		close(f.quit)
+		close(c.quit)
 	}
+}
+
+func NewSingleSpace(maxSize int) *SingleSpace {
+	return &SingleSpace{New(maxSize)}
+}
+
+func (s *SingleSpace) Get(key string) ([]byte, bool) {
+	return s.cache.Get("", key)
+}
+
+func (s *SingleSpace) Set(key string, data []byte, ttl time.Duration) {
+	s.cache.Set("", key, data, ttl)
+}
+
+func (s *SingleSpace) Del(key string) {
+	s.cache.Del("", key)
+}
+
+// TODO: handle key spaces
+func (s *SingleSpace) Size() int {
+	return s.cache.Size()
+}
+
+// TODO: handle key spaces
+func (s *SingleSpace) Len() int {
+	return s.cache.Len()
+}
+
+func (s *SingleSpace) Close() {
+	s.cache.Close()
 }

@@ -8,7 +8,7 @@ build:
 install:
 	go install
 
-check:
+check: build
 	go test -coverprofile cover.out
 
 cover: check
@@ -16,3 +16,6 @@ cover: check
 
 showcover: check
 	go tool cover -html cover.out
+
+fmt:
+	go fmt
