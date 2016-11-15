@@ -22,8 +22,7 @@ const (
 	maxTTL            = time.Minute
 	minRoundLength    = 6
 	maxRoundLength    = 18
-	closeChance       = 300
-	closeFreq         = 150 * time.Millisecond
+	closeTryFreq      = testDuration / 8
 )
 
 type action func(*Cache)
@@ -71,6 +70,32 @@ func randomStrings(n, min, max int) []string {
 	return s
 }
 
+func init() {
+	keySpaces = randomStrings(keySpaceCount, minKeySpaceLength, maxKeySpaceLength)
+	keys = randomStrings(keyCount, minKeyLength, maxKeyLength)
+	data = randomByteSlices(keyCount, minDataLength, maxDataLength)
+
+	for name, w := range actionWeights {
+		var a action
+		switch name {
+		case "get":
+			a = testGet
+		case "set":
+			a = testSet
+		case "del":
+			a = testDel
+		case "size":
+			a = testSize
+		case "cacheLen":
+			a = testLen
+		}
+
+		for i := 0; i < w; i++ {
+			actions = append(actions, a)
+		}
+	}
+}
+
 func randomKeySpace() string {
 	return keySpaces[rand.Intn(len(keySpaces))]
 }
@@ -95,49 +120,23 @@ func randomRoundLength() int {
 	return minRoundLength + rand.Intn(maxRoundLength-minRoundLength)
 }
 
-func init() {
-	keySpaces = randomStrings(keySpaceCount, minKeySpaceLength, maxKeySpaceLength)
-	keys = randomStrings(keyCount, minKeyLength, maxKeyLength)
-	data = randomByteSlices(keyCount, minDataLength, maxDataLength)
-
-	for name, w := range actionWeights {
-		var a action
-		switch name {
-		case "get":
-			a = get
-		case "set":
-			a = set
-		case "del":
-			a = del
-		case "size":
-			a = size
-		case "cacheLen":
-			a = cacheLen
-		}
-
-		for i := 0; i < w; i++ {
-			actions = append(actions, a)
-		}
-	}
-}
-
-func get(c *Cache) {
+func testGet(c *Cache) {
 	c.Get(randomKeySpace(), randomKey())
 }
 
-func set(c *Cache) {
+func testSet(c *Cache) {
 	c.Set(randomKeySpace(), randomKey(), randomData(), randomTTL())
 }
 
-func del(c *Cache) {
+func testDel(c *Cache) {
 	c.Del(randomKeySpace(), randomKey())
 }
 
-func size(c *Cache) {
+func testSize(c *Cache) {
 	c.Size()
 }
 
-func cacheLen(c *Cache) {
+func testLen(c *Cache) {
 	c.Len()
 }
 
@@ -169,14 +168,7 @@ func fuzzy(t *testing.T, quit <-chan struct{}, c chan *Cache) {
 	}
 }
 
-func checkState(t *testing.T, c *Cache, quit chan<- struct{}) {
-	err := func(reason string) {
-		t.Error()
-		if quit != nil {
-			close(quit)
-		}
-	}
-
+func checkState(t *testing.T, c *Cache) {
 	var ts, tl int
 	for ks, s := range c.cache.spaces {
 		var (
@@ -187,24 +179,24 @@ func checkState(t *testing.T, c *Cache, quit chan<- struct{}) {
 		e := s.lru
 		for e != nil {
 			if e.keySpace != ks {
-				err("inconsitent state: entry in invalid key space")
+				t.Error("inconsitent state: entry in invalid key space")
 				return
 			}
 
 			if s.lookup[e.key] != e {
-				err("inconsistent state: activity list does not match lookup")
+				t.Error("inconsistent state: activity list does not match lookup")
 				return
 			}
 
 			ss += len(e.data) + len(e.key)
 			sl++
 			if sl > len(s.lookup) {
-				err("inconsistent state: activity list does not match lookup")
+				t.Error("inconsistent state: activity list does not match lookup")
 				return
 			}
 
 			if e.moreRecent != nil && e.moreRecent.lessRecent != e {
-				err("inconsistent state: broken activity list")
+				t.Error("inconsistent state: broken activity list")
 				return
 			}
 
@@ -212,12 +204,12 @@ func checkState(t *testing.T, c *Cache, quit chan<- struct{}) {
 		}
 
 		if last != s.mru {
-			err("inconsistent state: lru does not match mru")
+			t.Error("inconsistent state: lru does not match mru")
 			return
 		}
 
 		if sl != len(s.lookup) {
-			err("inconsistent state: activity list does not match lookup")
+			t.Error("inconsistent state: activity list does not match lookup")
 			return
 		}
 
@@ -226,20 +218,20 @@ func checkState(t *testing.T, c *Cache, quit chan<- struct{}) {
 	}
 
 	if ts != c.cache.size() {
-		err("inconsistent state: measured size does not match reported size")
+		t.Error("inconsistent state: measured size does not match reported size")
 		return
 	}
 
 	if tl != c.cache.len() {
-		err("inconsistent state: measured length does not match reported length")
+		t.Error("inconsistent state: measured length does not match reported length")
 		return
 	}
 }
 
-func closer(t *testing.T, quit chan struct{}, c chan *Cache) {
+func closer(t *testing.T, quit, err chan struct{}, c chan *Cache) {
 	for {
 		select {
-		case <-time.After(closeFreq):
+		case <-time.After(closeTryFreq):
 		case <-quit:
 		}
 
@@ -249,8 +241,9 @@ func closer(t *testing.T, quit chan struct{}, c chan *Cache) {
 			case <-cache.closed:
 			default:
 				cache.Close()
-				checkState(t, cache, quit)
+				checkState(t, cache)
 				if t.Failed() {
+					close(err)
 					return
 				}
 
@@ -269,24 +262,21 @@ func TestFuzzy(t *testing.T) {
 	}
 
 	quit := make(chan struct{})
-	cache := New(cacheSize)
+	err := make(chan struct{})
 	c := make(chan *Cache, procCount)
+
+	cache := New(cacheSize)
 	for i := 0; i < procCount-1; i++ {
 		c <- cache
 		go fuzzy(t, quit, c)
 	}
 
-	go closer(t, quit, c)
+	go closer(t, quit, err, c)
 
 	select {
 	case <-time.After(testDuration):
-		func() {
-			defer func() {
-				recover()
-			}()
-			close(quit)
-		}()
-	case <-quit:
+		close(quit)
+	case <-err:
 	}
 
 	for {
@@ -298,10 +288,7 @@ func TestFuzzy(t *testing.T) {
 				cache.Close()
 			}
 
-			checkState(t, cache, nil)
-			if t.Failed() {
-				return
-			}
+			checkState(t, cache)
 		default:
 			return
 		}

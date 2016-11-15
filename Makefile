@@ -2,7 +2,7 @@
 
 default: build
 
-all: build cover install
+all: build cover install lint
 
 build:
 	go build
@@ -11,7 +11,7 @@ install:
 	go install
 
 check: build
-	go test -coverprofile cover.out
+	go test -race -coverprofile cover.out
 
 checkshort: build
 	go test -test.short
@@ -24,3 +24,11 @@ showcover: check
 
 fmt:
 	go fmt
+
+vet:
+	go vet
+
+lint:
+	golint -set_exit_status
+
+precommit: fmt cover vet lint

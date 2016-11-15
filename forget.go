@@ -66,63 +66,68 @@ func (c *cache) remove(keySpace, key string) *entry {
 
 	c.available += e.size()
 	delete(space.lookup, key)
+
 	if len(space.lookup) == 0 {
 		delete(c.spaces, keySpace)
-	} else {
-		if space.lru == e {
-			space.lru, e.moreRecent.lessRecent = e.moreRecent, nil
-		} else {
-			e.lessRecent.moreRecent = e.moreRecent
-		}
+		return e
+	}
 
-		if space.mru == e {
-			space.mru, e.lessRecent.moreRecent = e.lessRecent, nil
-		} else {
-			e.moreRecent.lessRecent = e.lessRecent
-		}
+	if space.lru == e {
+		space.lru, e.moreRecent.lessRecent = e.moreRecent, nil
+	} else {
+		e.lessRecent.moreRecent = e.moreRecent
+	}
+
+	if space.mru == e {
+		space.mru, e.lessRecent.moreRecent = e.lessRecent, nil
+	} else {
+		e.moreRecent.lessRecent = e.lessRecent
 	}
 
 	return e
 }
 
-func (c *cache) append(e *entry) {
-	s := e.size()
-	c.available -= s
-
+func (c *cache) evict(ks string) {
 	var (
 		spaces  []*keySpace
 		counter int
 	)
 
 	for c.available < 0 {
-		if space, ok := c.spaces[e.keySpace]; ok {
+		if space, ok := c.spaces[ks]; ok {
 			c.remove(space.lru.keySpace, space.lru.key)
-		} else {
-			if len(spaces) == 0 {
-				spaces = make([]*keySpace, 0, len(c.spaces)-1)
-				for k, s := range c.spaces {
-					if k != e.keySpace {
-						spaces = append(spaces, s)
-					}
-				}
-			}
-
-			var space *keySpace
-			for space == nil || len(space.lookup) == 0 {
-				if space != nil {
-					spaces = append(spaces[:counter], spaces[counter+1:]...)
-					counter %= len(spaces)
-				}
-
-				space = spaces[counter]
-			}
-
-			lru := space.lru
-			c.remove(lru.keySpace, lru.key)
-			counter++
-			counter %= len(spaces)
+			continue
 		}
+
+		if len(spaces) == 0 {
+			spaces = make([]*keySpace, 0, len(c.spaces)-1)
+			for k, s := range c.spaces {
+				if k != ks {
+					spaces = append(spaces, s)
+				}
+			}
+		}
+
+		var space *keySpace
+		for space == nil || len(space.lookup) == 0 {
+			if space != nil {
+				spaces = append(spaces[:counter], spaces[counter+1:]...)
+				counter %= len(spaces)
+			}
+
+			space = spaces[counter]
+		}
+
+		c.remove(space.lru.keySpace, space.lru.key)
+		counter++
+		counter %= len(spaces)
 	}
+}
+
+func (c *cache) append(e *entry) {
+	s := e.size()
+	c.available -= s
+	c.evict(e.keySpace)
 
 	space, ok := c.spaces[e.keySpace]
 	if !ok {
@@ -132,7 +137,6 @@ func (c *cache) append(e *entry) {
 
 	space.lookup[e.key] = e
 
-	e.moreRecent = nil
 	if space.lru == nil {
 		space.lru, space.mru, e.lessRecent, e.moreRecent = e, e, nil, nil
 	} else {
@@ -210,21 +214,19 @@ func (c *Cache) run() {
 			switch req.typ {
 			case getmsg:
 				rsp.data, rsp.ok = c.cache.get(req.keySpace, req.key)
-				c.response(req, rsp)
+				req.response <- rsp
 			case setmsg:
 				c.cache.set(req.keySpace, req.key, req.data, req.ttl)
-				c.response(req, rsp)
+				req.response <- rsp
 			case delmsg:
 				c.cache.del(req.keySpace, req.key)
-				c.response(req, rsp)
+				req.response <- rsp
 			case sizemsg:
 				rsp.size = c.cache.size()
-				c.response(req, rsp)
+				req.response <- rsp
 			case lenmsg:
 				rsp.len = c.cache.len()
-				c.response(req, rsp)
-			default:
-				panic("invalid mesasge type")
+				req.response <- rsp
 			}
 		case <-c.quit:
 			close(c.closed)
@@ -242,21 +244,7 @@ func (c *Cache) request(req message) message {
 		return message{}
 	}
 
-	select {
-	case rsp := <-req.response:
-		return rsp
-	case <-c.quit:
-		return message{}
-	}
-}
-
-func (c *Cache) response(req, rsp message) {
-	select {
-	case <-c.quit:
-		return
-	default:
-		req.response <- rsp
-	}
+	return <-req.response
 }
 
 func (c *Cache) Get(keySpace, key string) ([]byte, bool) {

@@ -13,7 +13,7 @@ type testDataItem struct {
 	data  []byte
 }
 
-func initForget(d map[string][]byte) *SingleSpace {
+func testCache(d map[string][]byte) *SingleSpace {
 	c := NewSingleSpace(1 << 9)
 	for k, dk := range d {
 		c.Set(k, dk, time.Hour)
@@ -55,7 +55,7 @@ func TestGet(t *testing.T) {
 		},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			c := initForget(ti.init)
+			c := testCache(ti.init)
 			defer c.Close()
 
 			d, ok := c.Get(ti.key)
@@ -146,7 +146,7 @@ func TestSet(t *testing.T) {
 		}},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			c := initForget(ti.init)
+			c := testCache(ti.init)
 			defer c.Close()
 
 			c.Set(ti.key, ti.data, time.Hour)
@@ -221,7 +221,7 @@ func TestDelete(t *testing.T) {
 		}},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			c := initForget(ti.init)
+			c := testCache(ti.init)
 			defer c.Close()
 
 			c.Del(ti.key)
@@ -258,7 +258,7 @@ func TestSizeLen(t *testing.T) {
 		2,
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			c := initForget(ti.init)
+			c := testCache(ti.init)
 			defer c.Close()
 
 			if s := c.Size(); s != ti.expectSize {
@@ -273,7 +273,7 @@ func TestSizeLen(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	c := initForget(map[string][]byte{
+	c := testCache(map[string][]byte{
 		"foo": []byte{1, 2, 3},
 		"bar": []byte{4, 5, 6},
 	})
