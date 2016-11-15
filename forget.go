@@ -50,7 +50,7 @@ type SingleSpace struct {
 }
 
 func (e *entry) size() int {
-	return len(e.keySpace) + len(e.key) + len(e.data)
+	return len(e.key) + len(e.data)
 }
 
 func (c *cache) remove(keySpace, key string) *entry {

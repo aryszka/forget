@@ -7,9 +7,10 @@ import (
 )
 
 type testDataItem struct {
-	key  string
-	ok   bool
-	data []byte
+	space string
+	key   string
+	ok    bool
+	data  []byte
 }
 
 func initForget(d map[string][]byte) *SingleSpace {
@@ -102,14 +103,17 @@ func TestSet(t *testing.T) {
 			data: []byte{7, 8, 9},
 		},
 		[]testDataItem{{
+			"",
 			"foo",
 			true,
 			[]byte{1, 2, 3},
 		}, {
+			"",
 			"bar",
 			true,
 			[]byte{4, 5, 6},
 		}, {
+			"",
 			"baz",
 			true,
 			[]byte{7, 8, 9},
@@ -125,14 +129,17 @@ func TestSet(t *testing.T) {
 			data: []byte{7, 8, 9},
 		},
 		[]testDataItem{{
+			"",
 			"foo",
 			true,
 			[]byte{1, 2, 3},
 		}, {
+			"",
 			"bar",
 			true,
 			[]byte{7, 8, 9},
 		}, {
+			"",
 			"baz",
 			false,
 			nil,
@@ -187,10 +194,12 @@ func TestDelete(t *testing.T) {
 			key: "baz",
 		},
 		[]testDataItem{{
+			"",
 			"foo",
 			true,
 			[]byte{1, 2, 3},
 		}, {
+			"",
 			"bar",
 			true,
 			[]byte{4, 5, 6},
@@ -205,6 +214,7 @@ func TestDelete(t *testing.T) {
 			key: "foo",
 		},
 		[]testDataItem{{
+			"",
 			"bar",
 			true,
 			[]byte{4, 5, 6},

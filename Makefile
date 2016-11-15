@@ -1,3 +1,5 @@
+.PHONY: check
+
 default: build
 
 all: build cover install
