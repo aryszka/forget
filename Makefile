@@ -11,7 +11,7 @@ install:
 	go install
 
 check: build
-	go test -race -coverprofile cover.out
+	go test -race
 
 checkshort: build
 	go test -test.short
@@ -19,10 +19,13 @@ checkshort: build
 bench: build
 	go test -cpuprofile cpu.out -memprofile mem.out -bench .
 
-cover: check
+gencover: build
+	go test -coverprofile cover.out
+
+cover: gencover
 	go tool cover -func cover.out
 
-showcover: check
+showcover: gencover
 	go tool cover -html cover.out
 
 fmt:

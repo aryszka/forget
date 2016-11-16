@@ -10,7 +10,7 @@ const (
 	testDuration      = 3600 * time.Millisecond
 	procCount         = 12
 	cacheSize         = 1 << 20
-	keySpaceCount     = 30
+	keyspaceCount     = 30
 	keyCount          = 3000
 	minKeySpaceLength = 3
 	maxKeySpaceLength = 15
@@ -36,7 +36,7 @@ var actionWeights = map[string]int{
 }
 
 var (
-	keySpaces, keys []string
+	keyspaces, keys []string
 	data            [][]byte
 	actions         []action
 )
@@ -71,7 +71,7 @@ func randomStrings(n, min, max int) []string {
 }
 
 func init() {
-	keySpaces = randomStrings(keySpaceCount, minKeySpaceLength, maxKeySpaceLength)
+	keyspaces = randomStrings(keyspaceCount, minKeySpaceLength, maxKeySpaceLength)
 	keys = randomStrings(keyCount, minKeyLength, maxKeyLength)
 	data = randomByteSlices(keyCount, minDataLength, maxDataLength)
 
@@ -97,7 +97,7 @@ func init() {
 }
 
 func randomKeySpace() string {
-	return keySpaces[rand.Intn(len(keySpaces))]
+	return keyspaces[rand.Intn(len(keyspaces))]
 }
 
 func randomKey() string {
@@ -133,11 +133,11 @@ func testDel(c *Cache) {
 }
 
 func testSize(c *Cache) {
-	c.Size()
+	c.TotalSize()
 }
 
 func testLen(c *Cache) {
-	c.Len()
+	c.TotalLen()
 }
 
 func fuzzy(t *testing.T, quit <-chan struct{}, c chan *Cache) {
@@ -178,7 +178,7 @@ func checkState(t *testing.T, c *Cache) {
 
 		e := s.lru
 		for e != nil {
-			if e.keySpace != ks {
+			if e.keyspace != ks {
 				t.Error("inconsitent state: entry in invalid key space")
 				return
 			}
@@ -217,12 +217,12 @@ func checkState(t *testing.T, c *Cache) {
 		tl += sl
 	}
 
-	if ts != c.cache.size() {
+	if ts != c.cache.totalSize() {
 		t.Error("inconsistent state: measured size does not match reported size")
 		return
 	}
 
-	if tl != c.cache.len() {
+	if tl != c.cache.totalLen() {
 		t.Error("inconsistent state: measured length does not match reported length")
 		return
 	}
