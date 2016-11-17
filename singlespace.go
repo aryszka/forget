@@ -7,7 +7,7 @@ type SingleSpace struct {
 }
 
 func NewSingleSpace(maxSize int) *SingleSpace {
-	return &SingleSpace{New(maxSize)}
+	return &SingleSpace{cache: New(maxSize)}
 }
 
 func (s *SingleSpace) Get(key string) ([]byte, bool) {
@@ -22,18 +22,8 @@ func (s *SingleSpace) Del(key string) {
 	s.cache.Del("", key)
 }
 
-func (s *SingleSpace) Keys() []string {
-	return s.cache.Keys("")
-}
-
-// TODO: handle key spaces
-func (s *SingleSpace) Size() int {
-	return s.cache.TotalSize()
-}
-
-// TODO: handle key spaces
-func (s *SingleSpace) Len() int {
-	return s.cache.TotalLen()
+func (s *SingleSpace) Status() *Status {
+	return s.cache.Status("")
 }
 
 func (s *SingleSpace) Close() {

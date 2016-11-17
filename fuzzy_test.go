@@ -28,11 +28,11 @@ const (
 type action func(*Cache)
 
 var actionWeights = map[string]int{
-	"get":      600,
-	"set":      300,
-	"del":      40,
-	"size":     30,
-	"cacheLen": 30,
+	"get":         600,
+	"set":         300,
+	"del":         40,
+	"status":      30,
+	"cacheStatus": 30,
 }
 
 var (
@@ -84,10 +84,10 @@ func init() {
 			a = testSet
 		case "del":
 			a = testDel
-		case "size":
-			a = testSize
-		case "cacheLen":
-			a = testLen
+		case "status":
+			a = testStatus
+		case "cacheStatus":
+			a = testCacheStatus
 		}
 
 		for i := 0; i < w; i++ {
@@ -132,12 +132,12 @@ func testDel(c *Cache) {
 	c.Del(randomKeySpace(), randomKey())
 }
 
-func testSize(c *Cache) {
-	c.TotalSize()
+func testStatus(c *Cache) {
+	c.Status(randomKeySpace())
 }
 
-func testLen(c *Cache) {
-	c.TotalLen()
+func testCacheStatus(c *Cache) {
+	c.CacheStatus()
 }
 
 func fuzzy(t *testing.T, quit <-chan struct{}, c chan *Cache) {
@@ -217,12 +217,13 @@ func checkState(t *testing.T, c *Cache) {
 		tl += sl
 	}
 
-	if ts != c.cache.totalSize() {
+	cs := getCacheStatus(c.cache.spaces)
+	if ts != cs.Size {
 		t.Error("inconsistent state: measured size does not match reported size")
 		return
 	}
 
-	if tl != c.cache.totalLen() {
+	if tl != cs.Len {
 		t.Error("inconsistent state: measured length does not match reported length")
 		return
 	}

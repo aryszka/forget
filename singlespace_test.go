@@ -238,7 +238,7 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-func TestSizeLen(t *testing.T) {
+func TestSingleSpaceStatus(t *testing.T) {
 	for _, ti := range []struct {
 		msg                   string
 		init                  map[string][]byte
@@ -261,12 +261,13 @@ func TestSizeLen(t *testing.T) {
 			c := testCache(ti.init)
 			defer c.Close()
 
-			if s := c.Size(); s != ti.expectSize {
-				t.Error("invalid size", s, ti.expectSize)
+			s := c.Status()
+			if s.Size != ti.expectSize {
+				t.Error("invalid size", s.Size, ti.expectSize)
 			}
 
-			if s := c.Len(); s != ti.expectLen {
-				t.Error("invalid len", s, ti.expectLen)
+			if s.Len != ti.expectLen {
+				t.Error("invalid len", s.Len, ti.expectLen)
 			}
 		})
 	}
@@ -285,7 +286,7 @@ func TestClose(t *testing.T) {
 
 	c.Set("baz", []byte{7, 8, 9}, time.Hour)
 	c.Del("foo")
-	c.Size()
+	c.Status()
 }
 
 func TestExpiration(t *testing.T) {

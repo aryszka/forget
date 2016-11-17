@@ -13,7 +13,7 @@ install:
 check: build
 	go test -race
 
-checkshort: build
+shortcheck: build
 	go test -test.short
 
 bench: build
