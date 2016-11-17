@@ -24,6 +24,13 @@ func (e *entry) size() int {
 	return len(e.key) + len(e.data)
 }
 
+func newCache(maxSize int) *cache {
+	return &cache{
+		maxSize: maxSize,
+		spaces:  make(map[string]*keyspace),
+	}
+}
+
 func (c *cache) remove(keyspace, key string) (*entry, bool) {
 	space, ok := c.spaces[keyspace]
 	if !ok {
@@ -63,34 +70,41 @@ func (c *cache) evict(currentSpace string, size int) {
 		return
 	}
 
-	var totalSize, counter int
+	var (
+		totalSize, counter int
+		cspace             *keyspace
+	)
+
 	otherSpaces := make([]*keyspace, 0, len(c.spaces)-1)
 	for k, space := range c.spaces {
 		totalSize += space.size
-		if k != currentSpace {
+
+		if k == currentSpace {
+			cspace = space
+		} else {
 			otherSpaces = append(otherSpaces, space)
 		}
 	}
 
 	for totalSize+size > c.maxSize {
-		if space, ok := c.spaces[currentSpace]; ok {
-			c.remove(space.lru.keyspace, space.lru.key)
-			totalSize -= space.lru.size()
+		if cspace != nil && len(cspace.lookup) > 0 {
+			totalSize -= cspace.lru.size()
+			c.remove(cspace.lru.keyspace, cspace.lru.key)
 			continue
 		}
 
-		var space *keyspace
-		for space == nil || len(space.lookup) == 0 {
-			if space != nil {
+		var other *keyspace
+		for other == nil || len(other.lookup) == 0 {
+			if other != nil {
 				otherSpaces = append(otherSpaces[:counter], otherSpaces[counter+1:]...)
 				counter %= len(otherSpaces)
 			}
 
-			space = otherSpaces[counter]
+			other = otherSpaces[counter]
 		}
 
-		c.remove(space.lru.keyspace, space.lru.key)
-		totalSize -= space.lru.size()
+		totalSize -= other.lru.size()
+		c.remove(other.lru.keyspace, other.lru.key)
 		counter++
 		counter %= len(otherSpaces)
 	}
@@ -147,4 +161,34 @@ func (c *cache) set(keyspace, key string, data []byte, ttl time.Duration) {
 
 func (c *cache) del(keyspace, key string) {
 	c.remove(keyspace, key)
+}
+
+func getStatusOf(space *keyspace) *KeyspaceStatus {
+	s := &KeyspaceStatus{}
+	if space == nil {
+		return s
+	}
+
+	s.Len = len(space.lookup)
+	for _, e := range space.lookup {
+		s.Size += e.size()
+	}
+
+	return s
+}
+
+func (c *cache) getKeyspaceStatus(keyspace string) *KeyspaceStatus {
+	return getStatusOf(c.spaces[keyspace])
+}
+
+func (c *cache) getStatus() *Status {
+	cs := &Status{Keyspaces: make(map[string]*KeyspaceStatus)}
+	for k, space := range c.spaces {
+		s := getStatusOf(space)
+		cs.Keyspaces[k] = s
+		cs.Len += s.Len
+		cs.Size += s.Size
+	}
+
+	return cs
 }

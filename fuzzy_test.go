@@ -9,7 +9,7 @@ import (
 const (
 	testDuration      = 3600 * time.Millisecond
 	procCount         = 12
-	cacheSize         = 1 << 20
+	cacheSize         = 1 << 15
 	keyspaceCount     = 30
 	keyCount          = 3000
 	minKeySpaceLength = 3
@@ -22,17 +22,17 @@ const (
 	maxTTL            = time.Minute
 	minRoundLength    = 6
 	maxRoundLength    = 18
-	closeTryFreq      = testDuration / 8
+	closeTryFreq      = testDuration / 16
 )
 
 type action func(*Cache)
 
 var actionWeights = map[string]int{
-	"get":         600,
-	"set":         300,
-	"del":         40,
-	"status":      30,
-	"cacheStatus": 30,
+	"get":            600,
+	"set":            300,
+	"del":            40,
+	"keyspaceStatus": 30,
+	"status":         30,
 }
 
 var (
@@ -84,10 +84,10 @@ func init() {
 			a = testSet
 		case "del":
 			a = testDel
+		case "keyspaceStatus":
+			a = testKeyspaceStatus
 		case "status":
 			a = testStatus
-		case "cacheStatus":
-			a = testCacheStatus
 		}
 
 		for i := 0; i < w; i++ {
@@ -132,12 +132,12 @@ func testDel(c *Cache) {
 	c.Del(randomKeySpace(), randomKey())
 }
 
-func testStatus(c *Cache) {
-	c.Status(randomKeySpace())
+func testKeyspaceStatus(c *Cache) {
+	c.StatusOf(randomKeySpace())
 }
 
-func testCacheStatus(c *Cache) {
-	c.CacheStatus()
+func testStatus(c *Cache) {
+	c.Status()
 }
 
 func fuzzy(t *testing.T, quit <-chan struct{}, c chan *Cache) {
@@ -217,7 +217,7 @@ func checkState(t *testing.T, c *Cache) {
 		tl += sl
 	}
 
-	cs := getCacheStatus(c.cache.spaces)
+	cs := c.cache.getStatus()
 	if ts != cs.Size {
 		t.Error("inconsistent state: measured size does not match reported size")
 		return

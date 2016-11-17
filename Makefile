@@ -1,4 +1,4 @@
-.PHONY: build check precommit
+.PHONY: build check precommit gencover
 
 default: build
 
@@ -35,6 +35,6 @@ vet:
 	go vet
 
 lint:
-	golint -set_exit_status
+	golint -set_exit_status -min_confidence 0.9
 
 precommit: fmt cover vet lint

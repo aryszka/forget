@@ -13,14 +13,23 @@ const (
 )
 
 type message struct {
-	typ           messageType
-	response      chan message
-	ok            bool
-	keyspace, key string
-	data          []byte
-	ttl           time.Duration
-	status        *Status
-	cacheStatus   *CacheStatus
+	typ            messageType
+	response       chan message
+	ok             bool
+	keyspace, key  string
+	data           []byte
+	ttl            time.Duration
+	keyspaceStatus *KeyspaceStatus
+	status         *Status
+}
+
+type KeyspaceStatus struct {
+	Len, Size int
+}
+
+type Status struct {
+	Keyspaces map[string]*KeyspaceStatus
+	Len, Size int
 }
 
 type Cache struct {
@@ -31,10 +40,7 @@ type Cache struct {
 
 func New(maxSize int) *Cache {
 	c := &Cache{
-		cache: &cache{
-			maxSize: maxSize,
-			spaces:  make(map[string]*keyspace),
-		},
+		cache:  newCache(maxSize),
 		req:    make(chan message),
 		quit:   make(chan struct{}),
 		closed: make(chan struct{}),
@@ -56,8 +62,10 @@ func (c *Cache) run() {
 				c.cache.set(req.keyspace, req.key, req.data, req.ttl)
 			case delMsg:
 				c.cache.del(req.keyspace, req.key)
-			case statusMsg, cacheStatusMsg:
-				rsp = requestStatus(c.cache, req)
+			case statusMsg:
+				rsp.keyspaceStatus = c.cache.getKeyspaceStatus(req.keyspace)
+			case cacheStatusMsg:
+				rsp.status = c.cache.getStatus()
 			}
 
 			req.response <- rsp
@@ -95,17 +103,21 @@ func (c *Cache) Del(keyspace, key string) {
 	c.request(message{typ: delMsg, keyspace: keyspace, key: key})
 }
 
-func (c *Cache) Status(keyspace string) *Status {
+func (c *Cache) StatusOf(keyspace string) *KeyspaceStatus {
 	rsp := c.request(message{typ: statusMsg, keyspace: keyspace})
+	return rsp.keyspaceStatus
+}
+
+func (c *Cache) Status() *Status {
+	rsp := c.request(message{typ: cacheStatusMsg})
 	return rsp.status
 }
 
-func (c *Cache) CacheStatus() *CacheStatus {
-	rsp := c.request(message{typ: cacheStatusMsg})
-	return rsp.cacheStatus
-}
-
 func (c *Cache) Close() {
-	close(c.quit)
-	<-c.closed
+	select {
+	case <-c.quit:
+	default:
+		close(c.quit)
+		<-c.closed
+	}
 }

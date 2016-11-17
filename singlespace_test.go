@@ -6,299 +6,123 @@ import (
 	"time"
 )
 
-type testDataItem struct {
-	space string
-	key   string
-	ok    bool
-	data  []byte
-}
-
-func testCache(d map[string][]byte) *SingleSpace {
+func TestSingleSpaceGet(t *testing.T) {
 	c := NewSingleSpace(1 << 9)
-	for k, dk := range d {
-		c.Set(k, dk, time.Hour)
-	}
-
-	return c
-}
-
-func TestGet(t *testing.T) {
-	for _, ti := range []struct {
-		msg  string
-		init map[string][]byte
-		testDataItem
-	}{{
-		"empty cache",
-		nil,
-		testDataItem{
-			key: "foo",
-		},
-	}, {
-		"not found key",
-		map[string][]byte{
-			"foo": []byte{1, 2, 3},
-			"bar": []byte{4, 5, 6},
-		},
-		testDataItem{
-			key: "baz",
-		},
-	}, {
-		"key found",
-		map[string][]byte{
-			"foo": []byte{1, 2, 3},
-			"bar": []byte{4, 5, 6},
-		},
-		testDataItem{
-			key:  "bar",
-			ok:   true,
-			data: []byte{4, 5, 6},
-		},
-	}} {
-		t.Run(ti.msg, func(t *testing.T) {
-			c := testCache(ti.init)
-			defer c.Close()
-
-			d, ok := c.Get(ti.key)
-
-			if ok != ti.ok {
-				t.Error("unexpected response status", ok, ti.ok)
-				return
-			}
-
-			if !bytes.Equal(d, ti.data) {
-				t.Error("invalid response data", d, ti.data)
-			}
-		})
-	}
-}
-
-func TestSet(t *testing.T) {
-	for _, ti := range []struct {
-		msg  string
-		init map[string][]byte
-		testDataItem
-		checks []testDataItem
-	}{{
-		"set in empty",
-		nil,
-		testDataItem{
-			key:  "foo",
-			data: []byte{1, 2, 3},
-		},
-		[]testDataItem{{
-			key:  "foo",
-			ok:   true,
-			data: []byte{1, 2, 3},
-		}, {
-			key: "bar",
-		}},
-	}, {
-		"set in addition",
-		map[string][]byte{
-			"foo": []byte{1, 2, 3},
-			"bar": []byte{4, 5, 6},
-		},
-		testDataItem{
-			key:  "baz",
-			data: []byte{7, 8, 9},
-		},
-		[]testDataItem{{
-			"",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
-		}, {
-			"",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
-		}, {
-			"",
-			"baz",
-			true,
-			[]byte{7, 8, 9},
-		}},
-	}, {
-		"overwrite",
-		map[string][]byte{
-			"foo": []byte{1, 2, 3},
-			"bar": []byte{4, 5, 6},
-		},
-		testDataItem{
-			key:  "bar",
-			data: []byte{7, 8, 9},
-		},
-		[]testDataItem{{
-			"",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
-		}, {
-			"",
-			"bar",
-			true,
-			[]byte{7, 8, 9},
-		}, {
-			"",
-			"baz",
-			false,
-			nil,
-		}},
-	}} {
-		t.Run(ti.msg, func(t *testing.T) {
-			c := testCache(ti.init)
-			defer c.Close()
-
-			c.Set(ti.key, ti.data, time.Hour)
-			for _, chk := range ti.checks {
-				if d, ok := c.Get(chk.key); ok != chk.ok {
-					t.Error("unexpected response status", ok, chk.ok)
-					return
-				} else if !bytes.Equal(d, chk.data) {
-					t.Error("invalid response data", d, chk.data)
-				}
-			}
-		})
-	}
-}
-
-func TestOverSize(t *testing.T) {
-	c := NewSingleSpace(4)
 	defer c.Close()
-	c.Set("foo", []byte{1, 2, 3}, time.Hour)
+
 	if _, ok := c.Get("foo"); ok {
-		t.Error("failed to reject oversized data")
+		t.Error("unexpected cache item")
+		return
+	}
+
+	c.Set("foo", []byte{1, 2, 3}, time.Hour)
+	c.Set("bar", []byte{4, 5, 6}, time.Hour)
+
+	if d, ok := c.Get("foo"); !ok || !bytes.Equal(d, []byte{1, 2, 3}) {
+		t.Error("invalid cache item")
+		return
+	}
+
+	if d, ok := c.Get("bar"); !ok || !bytes.Equal(d, []byte{4, 5, 6}) {
+		t.Error("invalid cache item")
+		return
+	}
+
+	if _, ok := c.Get("baz"); ok {
+		t.Error("unexpected cache item")
+		return
 	}
 }
 
-func TestDelete(t *testing.T) {
-	for _, ti := range []struct {
-		msg  string
-		init map[string][]byte
-		testDataItem
-		checks []testDataItem
-	}{{
-		"empty cache",
-		nil,
-		testDataItem{
-			key: "foo",
-		},
-		nil,
-	}, {
-		"not found key",
-		map[string][]byte{
-			"foo": []byte{1, 2, 3},
-			"bar": []byte{4, 5, 6},
-		},
-		testDataItem{
-			key: "baz",
-		},
-		[]testDataItem{{
-			"",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
-		}, {
-			"",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
-		}},
-	}, {
-		"delete",
-		map[string][]byte{
-			"foo": []byte{1, 2, 3},
-			"bar": []byte{4, 5, 6},
-		},
-		testDataItem{
-			key: "foo",
-		},
-		[]testDataItem{{
-			"",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
-		}},
-	}} {
-		t.Run(ti.msg, func(t *testing.T) {
-			c := testCache(ti.init)
-			defer c.Close()
+func TestSingleSpaceSet(t *testing.T) {
+	c := NewSingleSpace(1 << 9)
+	defer c.Close()
 
-			c.Del(ti.key)
-			for _, chk := range ti.checks {
-				if d, ok := c.Get(chk.key); ok != chk.ok {
-					t.Error("unexpected response status", ok, chk.ok)
-					return
-				} else if !bytes.Equal(d, chk.data) {
-					t.Error("invalid response data", d, chk.data)
-				}
-			}
-		})
+	c.Set("foo", []byte{1, 2, 3}, time.Hour)
+	if d, ok := c.Get("foo"); !ok || !bytes.Equal(d, []byte{1, 2, 3}) {
+		t.Error("invalid cache item")
+		return
+	}
 
+	c.Set("foo", []byte{4, 5, 6}, time.Hour)
+	if d, ok := c.Get("foo"); !ok || !bytes.Equal(d, []byte{4, 5, 6}) {
+		t.Error("invalid cache item")
+		return
+	}
+
+	c.Set("bar", []byte{1, 2, 3}, time.Hour)
+	if d, ok := c.Get("foo"); !ok || !bytes.Equal(d, []byte{4, 5, 6}) {
+		t.Error("invalid cache item")
+		return
+	}
+	if d, ok := c.Get("bar"); !ok || !bytes.Equal(d, []byte{1, 2, 3}) {
+		t.Error("invalid cache item")
+		return
+	}
+}
+
+func TestSingleSpaceDelete(t *testing.T) {
+	c := NewSingleSpace(1 << 9)
+	defer c.Close()
+
+	c.Del("foo")
+
+	c.Set("foo", []byte{1, 2, 3}, time.Hour)
+	c.Set("bar", []byte{4, 5, 6}, time.Hour)
+
+	c.Del("baz")
+	if d, ok := c.Get("foo"); !ok || !bytes.Equal(d, []byte{1, 2, 3}) {
+		t.Error("invalid cache item")
+		return
+	}
+	if d, ok := c.Get("bar"); !ok || !bytes.Equal(d, []byte{4, 5, 6}) {
+		t.Error("invalid cache item")
+		return
+	}
+
+	c.Del("foo")
+	if _, ok := c.Get("foo"); ok {
+		t.Error("unexpected cache item")
+		return
+	}
+	if d, ok := c.Get("bar"); !ok || !bytes.Equal(d, []byte{4, 5, 6}) {
+		t.Error("invalid cache item")
+		return
 	}
 }
 
 func TestSingleSpaceStatus(t *testing.T) {
-	for _, ti := range []struct {
-		msg                   string
-		init                  map[string][]byte
-		expectSize, expectLen int
-	}{{
-		"empty",
-		nil,
-		0,
-		0,
-	}, {
-		"not empty",
-		map[string][]byte{
-			"foo": []byte{1, 2, 3},
-			"bar": []byte{4, 5, 6},
-		},
-		12,
-		2,
-	}} {
-		t.Run(ti.msg, func(t *testing.T) {
-			c := testCache(ti.init)
-			defer c.Close()
-
-			s := c.Status()
-			if s.Size != ti.expectSize {
-				t.Error("invalid size", s.Size, ti.expectSize)
-			}
-
-			if s.Len != ti.expectLen {
-				t.Error("invalid len", s.Len, ti.expectLen)
-			}
-		})
-	}
-}
-
-func TestClose(t *testing.T) {
-	c := testCache(map[string][]byte{
-		"foo": []byte{1, 2, 3},
-		"bar": []byte{4, 5, 6},
-	})
-	c.Close()
-
-	if _, ok := c.Get("foo"); ok {
-		t.Error("failed to close cache")
-	}
-
-	c.Set("baz", []byte{7, 8, 9}, time.Hour)
-	c.Del("foo")
-	c.Status()
-}
-
-func TestExpiration(t *testing.T) {
 	c := NewSingleSpace(1 << 9)
 	defer c.Close()
 
-	c.Set("foo", []byte{1, 2, 3}, 24*time.Millisecond)
-
-	time.Sleep(12 * time.Millisecond)
-	c.Get("foo")
-	time.Sleep(24 * time.Millisecond)
-	if _, ok := c.Get("foo"); ok {
-		t.Error("failed to expire item")
+	s := c.Status()
+	if s == nil || s.Len != 0 || s.Size != 0 {
+		t.Error("unexpected status")
+		return
 	}
+
+	c.Set("foo", []byte{1, 2, 3}, time.Hour)
+	c.Set("bar", []byte{3, 4, 5}, time.Hour)
+	c.Set("baz", []byte{7, 8, 9}, time.Hour)
+	c.Set("qux", []byte{0, 1, 2}, time.Hour)
+	c.Set("quux", []byte{0, 1, 2}, time.Hour)
+
+	s = c.Status()
+	if s == nil || s.Len != 5 || s.Size != 31 {
+		t.Error("unexpected status")
+		return
+	}
+}
+
+func TestSingleSpaceClose(t *testing.T) {
+	c := NewSingleSpace(1 << 9)
+	c.Set("foo", []byte{1, 2, 3}, time.Hour)
+
+	c.Close()
+	c.Set("bar", []byte{1, 2, 3}, time.Hour)
+	c.Get("foo")
+	c.Get("bar")
+	c.Del("foo")
+	c.Close()
+	c.Close()
 }

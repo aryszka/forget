@@ -15,7 +15,7 @@ func benchmarkGet(b *testing.B, n int) {
 }
 
 func benchmarkSet(b *testing.B, n int) {
-	c := New(n * (maxKeyLength + maxDataLength))
+	c := New(4 * n * (maxKeyLength + maxDataLength))
 	for i := 0; i < n; i++ {
 		c.Set(randomKeySpace(), randomKey(), randomData(), randomTTL())
 	}

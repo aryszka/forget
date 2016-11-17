@@ -22,8 +22,8 @@ func (s *SingleSpace) Del(key string) {
 	s.cache.Del("", key)
 }
 
-func (s *SingleSpace) Status() *Status {
-	return s.cache.Status("")
+func (s *SingleSpace) Status() *KeyspaceStatus {
+	return s.cache.StatusOf("")
 }
 
 func (s *SingleSpace) Close() {
