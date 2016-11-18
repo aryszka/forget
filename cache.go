@@ -65,17 +65,19 @@ func (c *cache) remove(keyspace, key string) (*entry, bool) {
 	return e, true
 }
 
-func (c *cache) evict(currentSpace string, size int) {
+func (c *cache) evict(currentSpace string, size int) (map[string][]string, int) {
 	if len(c.spaces) == 0 {
-		return
+		return nil, 0
 	}
 
 	var (
-		totalSize, counter int
-		cspace             *keyspace
+		totalSize, startSize, counter int
+		cspace                        *keyspace
 	)
 
+	evicted := make(map[string][]string)
 	otherSpaces := make([]*keyspace, 0, len(c.spaces)-1)
+
 	for k, space := range c.spaces {
 		totalSize += space.size
 
@@ -86,9 +88,11 @@ func (c *cache) evict(currentSpace string, size int) {
 		}
 	}
 
+	startSize = totalSize
 	for totalSize+size > c.maxSize {
 		if cspace != nil && len(cspace.lookup) > 0 {
 			totalSize -= cspace.lru.size()
+			evicted[cspace.lru.keyspace] = append(evicted[cspace.lru.keyspace], cspace.lru.key)
 			c.remove(cspace.lru.keyspace, cspace.lru.key)
 			continue
 		}
@@ -104,15 +108,18 @@ func (c *cache) evict(currentSpace string, size int) {
 		}
 
 		totalSize -= other.lru.size()
+		evicted[other.lru.keyspace] = append(evicted[other.lru.keyspace], other.lru.key)
 		c.remove(other.lru.keyspace, other.lru.key)
 		counter++
 		counter %= len(otherSpaces)
 	}
+
+	return evicted, totalSize - startSize
 }
 
-func (c *cache) append(e *entry) {
+func (c *cache) append(e *entry) (map[string][]string, int) {
 	s := e.size()
-	c.evict(e.keyspace, s)
+	evicted, sizeChange := c.evict(e.keyspace, s)
 
 	space, ok := c.spaces[e.keyspace]
 	if !ok {
@@ -120,7 +127,8 @@ func (c *cache) append(e *entry) {
 		c.spaces[e.keyspace] = space
 	}
 
-	space.size += e.size()
+	space.size += s
+	sizeChange += s
 	space.lookup[e.key] = e
 
 	if space.lru == nil {
@@ -128,39 +136,52 @@ func (c *cache) append(e *entry) {
 	} else {
 		space.mru.moreRecent, space.mru, e.lessRecent, e.moreRecent = e, e, space.mru, nil
 	}
+
+	return evicted, sizeChange
 }
 
-func (c *cache) get(keyspace, key string) ([]byte, bool) {
+func (c *cache) get(keyspace, key string) ([]byte, int, bool) {
 	e, ok := c.remove(keyspace, key)
 	if !ok {
-		return nil, false
+		return nil, 0, false
 	}
 
 	if e.expiration.Before(time.Now()) {
-		return nil, false
+		return nil, -e.size(), false
 	}
 
 	c.append(e)
-	return e.data, true
+	d := make([]byte, len(e.data))
+	copy(d, e.data)
+	return d, 0, true
 }
 
-func (c *cache) set(keyspace, key string, data []byte, ttl time.Duration) {
+func (c *cache) set(keyspace, key string, data []byte, ttl time.Duration) (map[string][]string, int) {
+	var previousSize int
 	e, ok := c.remove(keyspace, key)
-	if !ok {
+	if ok {
+		previousSize = e.size()
+	} else {
 		e = &entry{keyspace: keyspace, key: key}
 	}
 
-	e.data = data
+	e.data = make([]byte, len(data))
+	copy(e.data, data)
 	if e.size() > c.maxSize {
-		return
+		return nil, -previousSize
 	}
 
 	e.expiration = time.Now().Add(ttl)
-	c.append(e)
+	evicted, sizeChange := c.append(e)
+	return evicted, sizeChange - previousSize
 }
 
-func (c *cache) del(keyspace, key string) {
-	c.remove(keyspace, key)
+func (c *cache) del(keyspace, key string) int {
+	if e, ok := c.remove(keyspace, key); ok {
+		return -e.size()
+	}
+
+	return 0
 }
 
 func getStatusOf(space *keyspace) *KeyspaceStatus {

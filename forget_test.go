@@ -7,7 +7,7 @@ import (
 )
 
 func TestGet(t *testing.T) {
-	c := New(1 << 9)
+	c := New(Options{})
 	defer c.Close()
 
 	if _, ok := c.Get("s1", "foo"); ok {
@@ -40,7 +40,7 @@ func TestGet(t *testing.T) {
 }
 
 func TestSet(t *testing.T) {
-	c := New(1 << 9)
+	c := New(Options{})
 	defer c.Close()
 
 	c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
@@ -81,7 +81,7 @@ func TestSet(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	c := New(1 << 9)
+	c := New(Options{})
 	defer c.Close()
 
 	c.Del("s1", "foo")
@@ -131,7 +131,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestKeyspaceStatus(t *testing.T) {
-	c := New(1 << 9)
+	c := New(Options{})
 	defer c.Close()
 
 	s := c.StatusOf("s1")
@@ -164,7 +164,7 @@ func TestKeyspaceStatus(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	c := New(1 << 9)
+	c := New(Options{})
 	defer c.Close()
 
 	s := c.Status()
@@ -197,7 +197,7 @@ func TestStatus(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	c := New(1 << 9)
+	c := New(Options{})
 	c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
 
 	c.Close()

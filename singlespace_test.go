@@ -7,7 +7,7 @@ import (
 )
 
 func TestSingleSpaceGet(t *testing.T) {
-	c := NewSingleSpace(1 << 9)
+	c := NewSingleSpace(Options{})
 	defer c.Close()
 
 	if _, ok := c.Get("foo"); ok {
@@ -35,7 +35,7 @@ func TestSingleSpaceGet(t *testing.T) {
 }
 
 func TestSingleSpaceSet(t *testing.T) {
-	c := NewSingleSpace(1 << 9)
+	c := NewSingleSpace(Options{})
 	defer c.Close()
 
 	c.Set("foo", []byte{1, 2, 3}, time.Hour)
@@ -62,7 +62,7 @@ func TestSingleSpaceSet(t *testing.T) {
 }
 
 func TestSingleSpaceDelete(t *testing.T) {
-	c := NewSingleSpace(1 << 9)
+	c := NewSingleSpace(Options{})
 	defer c.Close()
 
 	c.Del("foo")
@@ -92,7 +92,7 @@ func TestSingleSpaceDelete(t *testing.T) {
 }
 
 func TestSingleSpaceStatus(t *testing.T) {
-	c := NewSingleSpace(1 << 9)
+	c := NewSingleSpace(Options{})
 	defer c.Close()
 
 	s := c.Status()
@@ -115,7 +115,7 @@ func TestSingleSpaceStatus(t *testing.T) {
 }
 
 func TestSingleSpaceClose(t *testing.T) {
-	c := NewSingleSpace(1 << 9)
+	c := NewSingleSpace(Options{})
 	c.Set("foo", []byte{1, 2, 3}, time.Hour)
 
 	c.Close()

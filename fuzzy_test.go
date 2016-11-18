@@ -22,7 +22,7 @@ const (
 	maxTTL            = time.Minute
 	minRoundLength    = 6
 	maxRoundLength    = 18
-	closeTryFreq      = testDuration / 16
+	closeTryFreq      = testDuration / 32
 )
 
 type action func(*Cache)
@@ -229,7 +229,7 @@ func checkState(t *testing.T, c *Cache) {
 	}
 }
 
-func closer(t *testing.T, quit, err chan struct{}, c chan *Cache) {
+func closer(t *testing.T, quit, err chan struct{}, c chan *Cache, nc chan<- *Notification) {
 	for {
 		select {
 		case <-time.After(closeTryFreq):
@@ -248,9 +248,19 @@ func closer(t *testing.T, quit, err chan struct{}, c chan *Cache) {
 					return
 				}
 
-				cache = New(cacheSize)
+				cache = New(Options{Notify: nc, NotificationLevel: Moderate, MaxSize: cacheSize})
 				c <- cache
 			}
+		case <-quit:
+			return
+		}
+	}
+}
+
+func receiveNotifications(quit <-chan struct{}, nc <-chan *Notification) {
+	for {
+		select {
+		case <-nc:
 		case <-quit:
 			return
 		}
@@ -265,14 +275,16 @@ func TestFuzzy(t *testing.T) {
 	quit := make(chan struct{})
 	err := make(chan struct{})
 	c := make(chan *Cache, procCount)
+	nc := make(chan *Notification, 32)
 
-	cache := New(cacheSize)
+	cache := New(Options{Notify: nc, NotificationLevel: Moderate, MaxSize: cacheSize})
 	for i := 0; i < procCount-1; i++ {
 		c <- cache
 		go fuzzy(t, quit, c)
 	}
 
-	go closer(t, quit, err, c)
+	go closer(t, quit, err, c, nc)
+	go receiveNotifications(quit, nc)
 
 	select {
 	case <-time.After(testDuration):

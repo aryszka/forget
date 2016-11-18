@@ -9,10 +9,12 @@ import (
 type testInit map[string]map[string][]byte
 
 type testDataItem struct {
-	space string
-	key   string
-	ok    bool
-	data  []byte
+	space      string
+	key        string
+	ok         bool
+	data       []byte
+	sizeChange int
+	evicted    map[string][]string
 }
 
 func createTestCacheWithSize(d testInit, maxSize int) *cache {
@@ -30,9 +32,37 @@ func createTestCache(d testInit) *cache {
 	return createTestCacheWithSize(d, 1<<9)
 }
 
+func compareEvicted(got, expect map[string][]string) bool {
+	if len(got) != len(expect) {
+		return false
+	}
+
+	for k, e := range got {
+		if len(e) != len(expect[k]) {
+			return false
+		}
+
+		for _, ei := range e {
+			var found bool
+			for _, eei := range expect[k] {
+				if eei == ei {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
 func checkData(t *testing.T, items []testDataItem, c *cache) {
 	for _, i := range items {
-		if d, ok := c.get(i.space, i.key); ok != i.ok {
+		if d, _, ok := c.get(i.space, i.key); ok != i.ok {
 			t.Error("unexpected response status", i.space, i.key, ok, i.ok)
 			return
 		} else if !bytes.Equal(d, i.data) {
@@ -90,7 +120,7 @@ func TestCacheGet(t *testing.T) {
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := createTestCache(ti.init)
-			d, ok := c.get(ti.space, ti.key)
+			d, _, ok := c.get(ti.space, ti.key)
 
 			if ok != ti.ok {
 				t.Error("unexpected response status", ok, ti.ok)
@@ -114,9 +144,10 @@ func TestCacheSet(t *testing.T) {
 		"set in empty",
 		nil,
 		testDataItem{
-			space: "s1",
-			key:   "foo",
-			data:  []byte{1, 2, 3},
+			space:      "s1",
+			key:        "foo",
+			data:       []byte{1, 2, 3},
+			sizeChange: 6,
 		},
 		[]testDataItem{{
 			space: "s1",
@@ -142,30 +173,29 @@ func TestCacheSet(t *testing.T) {
 			},
 		},
 		testDataItem{
-			space: "s2",
-			key:   "baz",
-			data:  []byte{7, 8, 9},
+			space:      "s2",
+			key:        "baz",
+			data:       []byte{7, 8, 9},
+			sizeChange: 6,
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
+			space: "s1",
+			key:   "foo",
+			ok:    true,
+			data:  []byte{1, 2, 3},
 		}, {
-			"s1",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
+			space: "s1",
+			key:   "bar",
+			ok:    true,
+			data:  []byte{4, 5, 6},
 		}, {
-			"s2",
-			"baz",
-			true,
-			[]byte{7, 8, 9},
+			space: "s2",
+			key:   "baz",
+			ok:    true,
+			data:  []byte{7, 8, 9},
 		}, {
-			"s2",
-			"qux",
-			false,
-			nil,
+			space: "s2",
+			key:   "qux",
 		}},
 	}, {
 		"set in addition, same space",
@@ -179,30 +209,31 @@ func TestCacheSet(t *testing.T) {
 			},
 		},
 		testDataItem{
-			space: "s1",
-			key:   "bar",
-			data:  []byte{4, 5, 6},
+			space:      "s1",
+			key:        "bar",
+			data:       []byte{4, 5, 6},
+			sizeChange: 6,
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
+			space: "s1",
+			key:   "foo",
+			ok:    true,
+			data:  []byte{1, 2, 3},
 		}, {
-			"s1",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
+			space: "s1",
+			key:   "bar",
+			ok:    true,
+			data:  []byte{4, 5, 6},
 		}, {
-			"s2",
-			"baz",
-			true,
-			[]byte{7, 8, 9},
+			space: "s2",
+			key:   "baz",
+			ok:    true,
+			data:  []byte{7, 8, 9},
 		}, {
-			"s2",
-			"qux",
-			true,
-			[]byte{0, 1, 2},
+			space: "s2",
+			key:   "qux",
+			ok:    true,
+			data:  []byte{0, 1, 2},
 		}},
 	}, {
 		"overwrite",
@@ -222,30 +253,34 @@ func TestCacheSet(t *testing.T) {
 			data:  []byte{3, 4, 5},
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
+			space: "s1",
+			key:   "foo",
+			ok:    true,
+			data:  []byte{1, 2, 3},
 		}, {
-			"s1",
-			"bar",
-			true,
-			[]byte{3, 4, 5},
+			space: "s1",
+			key:   "bar",
+			ok:    true,
+			data:  []byte{3, 4, 5},
 		}, {
-			"s2",
-			"baz",
-			true,
-			[]byte{7, 8, 9},
+			space: "s2",
+			key:   "baz",
+			ok:    true,
+			data:  []byte{7, 8, 9},
 		}, {
-			"s2",
-			"qux",
-			true,
-			[]byte{0, 1, 2},
+			space: "s2",
+			key:   "qux",
+			ok:    true,
+			data:  []byte{0, 1, 2},
 		}},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := createTestCache(ti.init)
-			c.set(ti.space, ti.key, ti.data, time.Hour)
+			_, sizeChange := c.set(ti.space, ti.key, ti.data, time.Hour)
+			if sizeChange != ti.sizeChange {
+				t.Error("invalid size change", sizeChange, ti.sizeChange)
+			}
+
 			checkData(t, ti.checks, c)
 		})
 	}
@@ -281,25 +316,25 @@ func TestCacheDelete(t *testing.T) {
 			key:   "baz",
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
+			space: "s1",
+			key:   "foo",
+			ok:    true,
+			data:  []byte{1, 2, 3},
 		}, {
-			"s1",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
+			space: "s1",
+			key:   "bar",
+			ok:    true,
+			data:  []byte{4, 5, 6},
 		}, {
-			"s2",
-			"baz",
-			true,
-			[]byte{7, 8, 9},
+			space: "s2",
+			key:   "baz",
+			ok:    true,
+			data:  []byte{7, 8, 9},
 		}, {
-			"s2",
-			"qux",
-			true,
-			[]byte{0, 1, 2},
+			space: "s2",
+			key:   "qux",
+			ok:    true,
+			data:  []byte{0, 1, 2},
 		}},
 	}, {
 		"delete",
@@ -314,34 +349,37 @@ func TestCacheDelete(t *testing.T) {
 			},
 		},
 		testDataItem{
-			space: "s1",
-			key:   "foo",
+			space:      "s1",
+			key:        "foo",
+			sizeChange: -6,
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			false,
-			nil,
+			space: "s1",
+			key:   "foo",
 		}, {
-			"s1",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
+			space: "s1",
+			key:   "bar",
+			ok:    true,
+			data:  []byte{4, 5, 6},
 		}, {
-			"s2",
-			"baz",
-			true,
-			[]byte{7, 8, 9},
+			space: "s2",
+			key:   "baz",
+			ok:    true,
+			data:  []byte{7, 8, 9},
 		}, {
-			"s2",
-			"qux",
-			true,
-			[]byte{0, 1, 2},
+			space: "s2",
+			key:   "qux",
+			ok:    true,
+			data:  []byte{0, 1, 2},
 		}},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := createTestCache(ti.init)
-			c.del(ti.space, ti.key)
+
+			if sizeChange := c.del(ti.space, ti.key); sizeChange != ti.sizeChange {
+				t.Error("invalid size change", sizeChange, ti.sizeChange)
+			}
+
 			checkData(t, ti.checks, c)
 		})
 
@@ -354,15 +392,20 @@ func TestCacheExpiration(t *testing.T) {
 	time.Sleep(12 * time.Millisecond)
 	c.get("s1", "foo")
 	time.Sleep(24 * time.Millisecond)
-	if _, ok := c.get("s1", "foo"); ok {
+	if _, sizeChange, ok := c.get("s1", "foo"); ok || sizeChange != -6 {
 		t.Error("failed to expire item")
 	}
 }
 
 func TestCacheOverSize(t *testing.T) {
-	c := newCache(4)
+	c := newCache(7)
 	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
-	if _, ok := c.get("s1", "foo"); ok {
+
+	if evicted, sizeChange := c.set("s1", "foo", []byte{1, 2, 3, 4, 5, 6}, time.Hour); len(evicted) != 0 || sizeChange != -6 {
+		t.Error("unexpected set success", len(evicted), sizeChange)
+	}
+
+	if _, _, ok := c.get("s1", "foo"); ok {
 		t.Error("failed to reject oversized data")
 	}
 }
@@ -390,35 +433,36 @@ func TestCacheEvict(t *testing.T) {
 		33,
 		nil,
 		testDataItem{
-			space: "s2",
-			key:   "quux",
-			data:  []byte{3, 4, 5},
+			space:      "s2",
+			key:        "quux",
+			data:       []byte{3, 4, 5},
+			sizeChange: 7,
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
+			space: "s1",
+			key:   "foo",
+			ok:    true,
+			data:  []byte{1, 2, 3},
 		}, {
-			"s1",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
+			space: "s1",
+			key:   "bar",
+			ok:    true,
+			data:  []byte{4, 5, 6},
 		}, {
-			"s2",
-			"baz",
-			true,
-			[]byte{7, 8, 9},
+			space: "s2",
+			key:   "baz",
+			ok:    true,
+			data:  []byte{7, 8, 9},
 		}, {
-			"s2",
-			"qux",
-			true,
-			[]byte{0, 1, 2},
+			space: "s2",
+			key:   "qux",
+			ok:    true,
+			data:  []byte{0, 1, 2},
 		}, {
-			"s2",
-			"quux",
-			true,
-			[]byte{3, 4, 5},
+			space: "s2",
+			key:   "quux",
+			ok:    true,
+			data:  []byte{3, 4, 5},
 		}},
 	}, {
 		"evict from own space",
@@ -435,30 +479,32 @@ func TestCacheEvict(t *testing.T) {
 		27,
 		map[string]string{"s2": "qux"},
 		testDataItem{
-			space: "s2",
-			key:   "quux",
-			data:  []byte{3, 4, 5},
+			space:      "s2",
+			key:        "quux",
+			data:       []byte{3, 4, 5},
+			sizeChange: 1,
+			evicted:    map[string][]string{"s2": []string{"baz"}},
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			true,
-			[]byte{1, 2, 3},
+			space: "s1",
+			key:   "foo",
+			ok:    true,
+			data:  []byte{1, 2, 3},
 		}, {
-			"s1",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
+			space: "s1",
+			key:   "bar",
+			ok:    true,
+			data:  []byte{4, 5, 6},
 		}, {
-			"s2",
-			"qux",
-			true,
-			[]byte{0, 1, 2},
+			space: "s2",
+			key:   "qux",
+			ok:    true,
+			data:  []byte{0, 1, 2},
 		}, {
-			"s2",
-			"quux",
-			true,
-			[]byte{3, 4, 5},
+			space: "s2",
+			key:   "quux",
+			ok:    true,
+			data:  []byte{3, 4, 5},
 		}},
 	}, {
 		"evict from other spaces",
@@ -479,45 +525,43 @@ func TestCacheEvict(t *testing.T) {
 		36,
 		map[string]string{"s1": "bar", "s3": "qux"},
 		testDataItem{
-			space: "s2",
-			key:   "quux",
-			data:  []byte("12345789012345678"),
+			space:      "s2",
+			key:        "quux",
+			data:       []byte("12345789012345678"),
+			sizeChange: -3,
+			evicted: map[string][]string{
+				"s1": []string{"foo"},
+				"s2": []string{"qux", "baz"},
+				"s3": []string{"foo"},
+			},
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			false,
-			nil,
+			space: "s1",
+			key:   "foo",
 		}, {
-			"s1",
-			"bar",
-			true,
-			[]byte{4, 5, 6},
+			space: "s1",
+			key:   "bar",
+			ok:    true,
+			data:  []byte{4, 5, 6},
 		}, {
-			"s2",
-			"baz",
-			false,
-			nil,
+			space: "s2",
+			key:   "baz",
 		}, {
-			"s2",
-			"qux",
-			false,
-			nil,
+			space: "s2",
+			key:   "qux",
 		}, {
-			"s2",
-			"quux",
-			true,
-			[]byte("12345789012345678"),
+			space: "s2",
+			key:   "quux",
+			ok:    true,
+			data:  []byte("12345789012345678"),
 		}, {
-			"s3",
-			"foo",
-			false,
-			nil,
+			space: "s3",
+			key:   "foo",
 		}, {
-			"s3",
-			"qux",
-			true,
-			[]byte{6, 7, 8},
+			space: "s3",
+			key:   "qux",
+			ok:    true,
+			data:  []byte{6, 7, 8},
 		}},
 	}, {
 		"zero another space",
@@ -538,45 +582,41 @@ func TestCacheEvict(t *testing.T) {
 		36,
 		map[string]string{"s3": "baz"},
 		testDataItem{
-			space: "s2",
-			key:   "quux",
-			data:  []byte("123456789012345678901"),
+			space:      "s2",
+			key:        "quux",
+			data:       []byte("123456789012345678901"),
+			sizeChange: -5,
+			evicted: map[string][]string{
+				"s1": []string{"foo"},
+				"s2": []string{"baz", "qux"},
+				"s3": []string{"foo", "bar"},
+			},
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			false,
-			nil,
+			space: "s1",
+			key:   "foo",
 		}, {
-			"s2",
-			"baz",
-			false,
-			nil,
+			space: "s2",
+			key:   "baz",
 		}, {
-			"s2",
-			"qux",
-			false,
-			nil,
+			space: "s2",
+			key:   "qux",
 		}, {
-			"s2",
-			"quux",
-			true,
-			[]byte("123456789012345678901"),
+			space: "s2",
+			key:   "quux",
+			ok:    true,
+			data:  []byte("123456789012345678901"),
 		}, {
-			"s3",
-			"foo",
-			false,
-			nil,
+			space: "s3",
+			key:   "foo",
 		}, {
-			"s3",
-			"bar",
-			false,
-			nil,
+			space: "s3",
+			key:   "bar",
 		}, {
-			"s3",
-			"baz",
-			true,
-			[]byte{9, 0, 1},
+			space: "s3",
+			key:   "baz",
+			ok:    true,
+			data:  []byte{9, 0, 1},
 		}},
 	}, {
 		"zero all spaces",
@@ -597,45 +637,39 @@ func TestCacheEvict(t *testing.T) {
 		36,
 		map[string]string{"s3": "baz"},
 		testDataItem{
-			space: "s2",
-			key:   "quux",
-			data:  []byte("12345678901234567890123456789"),
+			space:      "s2",
+			key:        "quux",
+			data:       []byte("12345678901234567890123456789"),
+			sizeChange: -3,
+			evicted: map[string][]string{
+				"s1": []string{"foo"},
+				"s2": []string{"baz", "qux"},
+				"s3": []string{"foo", "bar", "baz"},
+			},
 		},
 		[]testDataItem{{
-			"s1",
-			"foo",
-			false,
-			nil,
+			space: "s1",
+			key:   "foo",
 		}, {
-			"s2",
-			"baz",
-			false,
-			nil,
+			space: "s2",
+			key:   "baz",
 		}, {
-			"s2",
-			"qux",
-			false,
-			nil,
+			space: "s2",
+			key:   "qux",
 		}, {
-			"s2",
-			"quux",
-			true,
-			[]byte("12345678901234567890123456789"),
+			space: "s2",
+			key:   "quux",
+			ok:    true,
+			data:  []byte("12345678901234567890123456789"),
 		}, {
-			"s3",
-			"foo",
-			false,
-			nil,
+			space: "s3",
+			key:   "foo",
 		}, {
-			"s3",
-			"bar",
-			false,
-			nil,
+			space: "s3",
+			key:   "bar",
 		}, {
-			"s3",
-			"baz",
-			false,
-			nil,
+			space: "s3",
+			key:   "baz",
 		}},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
@@ -644,7 +678,12 @@ func TestCacheEvict(t *testing.T) {
 				c.get(s, k)
 			}
 
-			c.set(ti.space, ti.key, ti.data, time.Hour)
+			if evicted, sizeChange := c.set(ti.space, ti.key, ti.data, time.Hour); sizeChange != ti.sizeChange {
+				t.Error("invalid size change", sizeChange, ti.sizeChange)
+			} else if !compareEvicted(evicted, ti.evicted) {
+				t.Error("invalid evicted", evicted, ti.evicted)
+			}
+
 			checkData(t, ti.checks, c)
 		})
 
@@ -712,5 +751,23 @@ func TestCacheStatus(t *testing.T) {
 	if s.Keyspaces["s2"].Len != 3 || s.Keyspaces["s2"].Size != 19 {
 		t.Error("unexpected status")
 		return
+	}
+}
+
+func TestCopy(t *testing.T) {
+	c := newCache(1 << 9)
+	b := []byte{1, 2, 3}
+	c.set("s1", "foo", b, time.Hour)
+
+	b[0] = 4
+	b, _, _ = c.get("s1", "foo")
+	if b[0] != 1 {
+		t.Error("failed to copy on set")
+	}
+
+	b[2] = 1
+	b, _, _ = c.get("s1", "foo")
+	if b[0] != 1 {
+		t.Error("failed to copy on get")
 	}
 }

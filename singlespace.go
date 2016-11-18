@@ -6,8 +6,8 @@ type SingleSpace struct {
 	cache *Cache
 }
 
-func NewSingleSpace(maxSize int) *SingleSpace {
-	return &SingleSpace{cache: New(maxSize)}
+func NewSingleSpace(o Options) *SingleSpace {
+	return &SingleSpace{cache: New(o)}
 }
 
 func (s *SingleSpace) Get(key string) ([]byte, bool) {
