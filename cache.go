@@ -2,9 +2,15 @@ package forget
 
 import "time"
 
+type segment struct {
+	index int
+	previous, next *segment
+}
+
 type entry struct {
 	keyspace, key          string
-	data                   []byte
+	firstSegment *segment
+	size int
 	expiration             time.Time
 	lessRecent, moreRecent *entry
 }
@@ -24,10 +30,18 @@ func (e *entry) size() int {
 	return len(e.key) + len(e.data)
 }
 
-func newCache(maxSize int) *cache {
+func newCache(o Options) *cache {
+	o.MaxSize -= o.MaxSize % o.SegmentSize
+	mem := make([][]byte, o.MaxSize / o.SegmentSize)
+	for i := 0; i < len(mem); i++ {
+		mem[i] = make([]byte, o.SegmentSize)
+	}
+
 	return &cache{
-		maxSize: maxSize,
+		maxSize: o.MaxSize,
+		segmentSize: o.SegmentSize,
 		spaces:  make(map[string]*keyspace),
+		mem: mem,
 	}
 }
 

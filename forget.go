@@ -67,6 +67,7 @@ type Cache struct {
 
 type Options struct {
 	MaxSize           int
+	SegmentSize int
 	Notify            chan<- *Notification
 	NotificationLevel NotificationLevel
 }
