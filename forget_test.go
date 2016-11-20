@@ -147,17 +147,17 @@ func TestKeyspaceStatus(t *testing.T) {
 	c.Set("s2", "quux", []byte{0, 1, 2}, time.Hour)
 
 	s = c.StatusOf("s1")
-	if s.Len != 2 || s.Segments != 5 || s.Effective != 12 {
+	if s.Len != 2 || s.Segments != 2 || s.Effective != 12 {
 		t.Error("unexpected status")
 		return
 	}
 	s = c.StatusOf("s2")
-	if s.Len != 3 || s.Segments != 5 || s.Effective != 19 {
+	if s.Len != 3 || s.Segments != 3 || s.Effective != 19 {
 		t.Error("unexpected status")
 		return
 	}
 	s = c.StatusOf("s3")
-	if s.Len != 0 || s.Segments != 5 || s.Effective != 0 {
+	if s.Len != 0 || s.Segments != 0 || s.Effective != 0 {
 		t.Error("unexpected status")
 		return
 	}
@@ -180,17 +180,17 @@ func TestStatus(t *testing.T) {
 	c.Set("s2", "quux", []byte{0, 1, 2}, time.Hour)
 
 	s = c.Status()
-	if len(s.Keyspaces) != 2 || s.Len != 5 || s.Segments != 0 || s.Effective != 31 {
+	if len(s.Keyspaces) != 2 || s.Len != 5 || s.Segments != 5 || s.Effective != 31 {
 		t.Error("unexpected status")
 		return
 	}
 
-	if s.Keyspaces["s1"].Len != 2 || s.Segments != 0 || s.Keyspaces["s1"].Effective != 12 {
-		t.Error("unexpected status")
+	if s.Keyspaces["s1"].Len != 2 || s.Keyspaces["s1"].Segments != 2 || s.Keyspaces["s1"].Effective != 12 {
+		t.Error("unexpected status", s)
 		return
 	}
 
-	if s.Keyspaces["s2"].Len != 3 || s.Segments != 0 || s.Keyspaces["s2"].Effective != 19 {
+	if s.Keyspaces["s2"].Len != 3 || s.Keyspaces["s2"].Segments != 3 || s.Keyspaces["s2"].Effective != 19 {
 		t.Error("unexpected status")
 		return
 	}

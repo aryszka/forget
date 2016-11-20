@@ -133,7 +133,7 @@ func TestCacheSet(t *testing.T) {
 			space:      "s1",
 			key:        "foo",
 			data:       []byte{1, 2, 3},
-			sizeChange: Size{},
+			sizeChange: Size{Len: 1, Segments: 1, Effective: 6},
 		},
 		[]testDataItem{{
 			space: "s1",
@@ -162,7 +162,7 @@ func TestCacheSet(t *testing.T) {
 			space:      "s2",
 			key:        "baz",
 			data:       []byte{7, 8, 9},
-			sizeChange: Size{},
+			sizeChange: Size{Len: 1, Segments: 1, Effective: 6},
 		},
 		[]testDataItem{{
 			space: "s1",
@@ -198,7 +198,7 @@ func TestCacheSet(t *testing.T) {
 			space:      "s1",
 			key:        "bar",
 			data:       []byte{4, 5, 6},
-			sizeChange: Size{},
+			sizeChange: Size{Len: 1, Segments: 1, Effective: 6},
 		},
 		[]testDataItem{{
 			space: "s1",
@@ -337,7 +337,7 @@ func TestCacheDelete(t *testing.T) {
 		testDataItem{
 			space:      "s1",
 			key:        "foo",
-			sizeChange: Size{},
+			sizeChange: Size{Len: -1, Segments: -1, Effective: -6},
 		},
 		[]testDataItem{{
 			space: "s1",
@@ -383,12 +383,17 @@ func TestCacheExpiration(t *testing.T) {
 	}
 }
 
-func TestCacheOverSize(t *testing.T) {
-	c := newCache(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+func TestCacheOversize(t *testing.T) {
+	c := newCache(Options{MaxSize: 8, SegmentSize: 2})
 	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
 
 	if evicted, sizeChange := c.set("s1", "foo", []byte{1, 2, 3, 4, 5, 6}, time.Hour); len(evicted) != 0 || sizeChange.zero() {
 		t.Error("unexpected set success", len(evicted), sizeChange)
+	}
+
+	s := c.getStatus()
+	if len(s.Keyspaces) != 0 || s.Len != 0 {
+		t.Error("old item was not deleted")
 	}
 
 	if _, ok, _ := c.get("s1", "foo"); ok {
@@ -417,14 +422,14 @@ func TestCacheEvict(t *testing.T) {
 				"qux": []byte{0, 1, 2},
 			},
 		},
-		33,
-		6,
+		40,
+		8,
 		nil,
 		testDataItem{
 			space:      "s2",
 			key:        "quux",
 			data:       []byte{3, 4, 5},
-			sizeChange: Size{},
+			sizeChange: Size{Len: 1, Segments: 1, Effective: 7},
 		},
 		[]testDataItem{{
 			space: "s1",
@@ -464,14 +469,14 @@ func TestCacheEvict(t *testing.T) {
 				"qux": []byte{0, 1, 2},
 			},
 		},
-		27,
-		6,
+		32,
+		8,
 		map[string]string{"s2": "qux"},
 		testDataItem{
 			space:      "s2",
 			key:        "quux",
 			data:       []byte{3, 4, 5},
-			sizeChange: Size{},
+			sizeChange: Size{Effective: 1},
 			evicted:    map[string]int{"s2": 6},
 		},
 		[]testDataItem{{
@@ -511,14 +516,14 @@ func TestCacheEvict(t *testing.T) {
 				"qux": []byte{6, 7, 8},
 			},
 		},
-		36,
-		6,
+		48,
+		8,
 		map[string]string{"s1": "bar", "s3": "qux"},
 		testDataItem{
 			space:      "s2",
 			key:        "quux",
-			data:       []byte("12345789012345678"),
-			sizeChange: Size{},
+			data:       []byte("123456789012345678901234567"),
+			sizeChange: Size{Len: -3, Segments: 0, Effective: 7},
 			evicted: map[string]int{
 				"s1": 6,
 				"s2": 12,
@@ -543,7 +548,7 @@ func TestCacheEvict(t *testing.T) {
 			space: "s2",
 			key:   "quux",
 			ok:    true,
-			data:  []byte("12345789012345678"),
+			data:  []byte("123456789012345678901234567"),
 		}, {
 			space: "s3",
 			key:   "foo",
@@ -569,14 +574,14 @@ func TestCacheEvict(t *testing.T) {
 				"baz": []byte{9, 0, 1},
 			},
 		},
-		36,
-		6,
+		48,
+		8,
 		map[string]string{"s3": "baz"},
 		testDataItem{
 			space:      "s2",
 			key:        "quux",
-			data:       []byte("123456789012345678901"),
-			sizeChange: Size{},
+			data:       []byte("12345678901234567890123456789012"),
+			sizeChange: Size{Len: -4, Segments: 0, Effective: 6},
 			evicted: map[string]int{
 				"s1": 6,
 				"s2": 12,
@@ -596,7 +601,7 @@ func TestCacheEvict(t *testing.T) {
 			space: "s2",
 			key:   "quux",
 			ok:    true,
-			data:  []byte("123456789012345678901"),
+			data:  []byte("12345678901234567890123456789012"),
 		}, {
 			space: "s3",
 			key:   "foo",
@@ -625,16 +630,16 @@ func TestCacheEvict(t *testing.T) {
 				"baz": []byte{9, 0, 1},
 			},
 		},
-		36,
-		6,
-		map[string]string{"s3": "baz"},
+		48,
+		8,
+		nil,
 		testDataItem{
 			space:      "s2",
 			key:        "quux",
-			data:       []byte("12345678901234567890123456789"),
-			sizeChange: Size{},
+			data:       []byte("123456789012345678901234567890123456789012"),
+			sizeChange: Size{Len: -5, Segments: 0, Effective: 10},
 			evicted: map[string]int{
-				"s1": 12,
+				"s1": 6,
 				"s2": 12,
 				"s3": 18,
 			},
@@ -652,7 +657,7 @@ func TestCacheEvict(t *testing.T) {
 			space: "s2",
 			key:   "quux",
 			ok:    true,
-			data:  []byte("12345678901234567890123456789"),
+			data:  []byte("123456789012345678901234567890123456789012"),
 		}, {
 			space: "s3",
 			key:   "foo",
@@ -698,12 +703,12 @@ func TestCacheKeyspaceStatus(t *testing.T) {
 	c.set("s2", "quux", []byte{0, 1, 2}, time.Hour)
 
 	s = c.getKeyspaceStatus("s1")
-	if s.Len != 0 || s.Segments != 0 || s.Effective != 0 {
+	if s.Len != 2 || s.Segments != 2 || s.Effective != 12 {
 		t.Error("unexpected status")
 		return
 	}
 	s = c.getKeyspaceStatus("s2")
-	if s.Len != 0 || s.Segments != 0 || s.Effective != 0 {
+	if s.Len != 3 || s.Segments != 4 || s.Effective != 19 {
 		t.Error("unexpected status")
 		return
 	}
@@ -730,7 +735,7 @@ func TestCacheStatus(t *testing.T) {
 	c.set("s2", "quux", []byte{0, 1, 2}, time.Hour)
 
 	s = c.getStatus()
-	if s.Len != 0 || s.Segments != 0 || s.Effective != 0 {
+	if s.Len != 5 || s.Segments != 6 || s.Effective != 31 {
 		t.Error("unexpected status")
 		return
 	}
@@ -740,7 +745,7 @@ func TestCacheStatus(t *testing.T) {
 		return
 	}
 
-	if s.Keyspaces["s2"].Len != 2 || s.Keyspaces["s2"].Segments != 2 || s.Keyspaces["s2"].Effective != 12 {
+	if s.Keyspaces["s2"].Len != 3 || s.Keyspaces["s2"].Segments != 4 || s.Keyspaces["s2"].Effective != 19 {
 		t.Error("unexpected status")
 		return
 	}

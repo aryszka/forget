@@ -108,7 +108,7 @@ func TestSingleSpaceStatus(t *testing.T) {
 	c.Set("quux", []byte{0, 1, 2}, time.Hour)
 
 	s = c.Status()
-	if s.Len != 5 || s.Segments != 0 || s.Effective != 31 {
+	if s.Len != 5 || s.Segments != 5 || s.Effective != 31 {
 		t.Error("unexpected status")
 		return
 	}

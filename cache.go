@@ -3,12 +3,21 @@ package forget
 import (
 	"hash"
 	"hash/fnv"
+	"log"
+	"os"
 	"time"
 )
 
 const (
 	DefaultMaxSize     = 1 << 30
 	DefaultSegmentSize = 1 << 18
+)
+
+type dataMode int
+
+const (
+	dataRead dataMode = iota
+	dataWrite
 )
 
 type segment struct {
@@ -95,24 +104,35 @@ func (c *cache) hash(key string) uint64 {
 	return c.hashing.Sum64()
 }
 
-func (c *cache) readWrite(e *entry, data []byte, offset int, write bool) {
-	var index, copied int
-	current := e.firstSegment
+func (c *cache) readWrite(e *entry, data []byte, offset int, mode dataMode) {
+	var (
+		index, copied int
+		to, from      []byte
+		current       node
+		s             *segment
+	)
+
+	current = e.firstSegment
 	for copied < len(data) {
-		s := current.(*segment)
-		if index <= offset && offset < index+c.segmentSize {
-			from := offset - index
-			if write {
-				copied = copy(s.data[from:], data)
-			} else {
-				copied = copy(data, s.data[from:])
+		s = current.(*segment)
+		if index+c.segmentSize >= offset {
+			var segmentIndex int
+			if index <= offset {
+				segmentIndex = offset - index
 			}
-		} else if index > offset {
-			if write {
-				copied += copy(s.data, data[copied:])
-			} else {
-				copied += copy(data[copied:], s.data)
+
+			switch mode {
+			case dataRead:
+				to = data[copied:]
+				from = s.data[segmentIndex:]
+			case dataWrite:
+				to = s.data[segmentIndex:]
+				from = data[copied:]
+			default:
+				panic("invalid data access mode")
 			}
+
+			copied += copy(to, from)
 		}
 
 		current = current.next()
@@ -122,12 +142,12 @@ func (c *cache) readWrite(e *entry, data []byte, offset int, write bool) {
 
 func (c *cache) readData(e *entry, offset, size int) []byte {
 	data := make([]byte, size)
-	c.readWrite(e, data, offset, false)
+	c.readWrite(e, data, offset, dataRead)
 	return data
 }
 
 func (c *cache) writeData(e *entry, offset int, data []byte) {
-	c.readWrite(e, data, offset, true)
+	c.readWrite(e, data, offset, dataWrite)
 }
 
 func (c *cache) lookup(s *keyspace, hash uint64, key string) (*entry, bool) {
@@ -162,8 +182,8 @@ func (c *cache) deleteEntry(space *keyspace, e *entry) Size {
 	}
 
 	sizeChange := Size{}.sub(e.size)
-	space.size = space.size.add(sizeChange)
-	c.size = c.size.add(sizeChange)
+	space.size = space.size.sub(e.size)
+	c.size = c.size.sub(e.size)
 
 	if len(hashEntries) > 0 {
 		space.lookup[e.hash] = hashEntries
@@ -206,8 +226,8 @@ func (c *cache) allocate(kspace string, requiredSegments int) (node, node, map[s
 		current := space.entries.first
 		for c.maxSegments-c.size.Segments < requiredSegments && current != nil {
 			sc := c.deleteEntry(space, current.(*entry))
+			evicted[kspace] -= sc.Effective
 			sizeChange = sizeChange.add(sc)
-			evicted[kspace] += sc.Effective
 			current = current.next()
 		}
 	}
@@ -224,7 +244,7 @@ func (c *cache) allocate(kspace string, requiredSegments int) (node, node, map[s
 		for c.maxSegments-c.size.Segments < requiredSegments {
 			var s *keyspace
 			for s == nil || s.entries.first == nil {
-				s := spaces[counter]
+				s = spaces[counter]
 				if s.entries.first == nil {
 					spaces = append(spaces[:counter], spaces[counter+1:]...)
 					counter %= len(spaces)
@@ -232,14 +252,22 @@ func (c *cache) allocate(kspace string, requiredSegments int) (node, node, map[s
 			}
 
 			sc := c.deleteEntry(s, s.entries.first.(*entry))
-			evicted[keys[s]] += sc.Effective
+			evicted[keys[s]] -= sc.Effective
 			sizeChange = sizeChange.add(sc)
 			counter = (counter + 1) % len(spaces)
 		}
 	}
 
 	first, last := c.firstFree, c.firstFree
-	c.firstFree = last.next()
+	func() {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Println("error", err, last == nil, c.getStatus(), c.maxSegments, requiredSegments)
+				os.Exit(-1)
+			}
+		}()
+		c.firstFree = last.next()
+	}()
 	requiredSegments--
 	for requiredSegments > 0 {
 		last, c.firstFree = c.firstFree, c.firstFree.next()
@@ -272,7 +300,7 @@ func (c *cache) get(kspace, key string) ([]byte, bool, Size) {
 
 	space.entries.remove(e)
 	space.entries.append(e)
-	return c.readData(e, len(key), e.size.Effective), true, Size{}
+	return c.readData(e, len(key), e.size.Effective-len(key)), true, Size{}
 }
 
 func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[string]int, Size) {
@@ -305,8 +333,16 @@ func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[str
 	if exists {
 		space.entries.remove(e)
 		sizeChange = sizeChange.sub(e.size)
-		c.data.removeRange(e.firstSegment, e.lastSegment)
-		c.data.insertRange(e.firstSegment, e.lastSegment, c.firstFree)
+		space.size = space.size.sub(e.size)
+		c.size = c.size.sub(e.size)
+		if e.size.Segments > 0 {
+			if e.lastSegment.next() != c.firstFree {
+				c.data.removeRange(e.firstSegment, e.lastSegment)
+				c.data.insertRange(e.firstSegment, e.lastSegment, c.firstFree)
+			}
+
+			c.firstFree = e.firstSegment
+		}
 	} else {
 		e = &entry{hash: hash}
 		if space == nil {
@@ -323,7 +359,7 @@ func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[str
 	e.size = Size{
 		Len:       1,
 		Segments:  requiredSegments,
-		Effective: len(data),
+		Effective: len(key) + len(data),
 	}
 	sizeChange = sizeChange.add(e.size)
 	space.size = space.size.add(e.size)
@@ -369,8 +405,8 @@ func (c *cache) getStatus() *Status {
 		Size:      c.size,
 	}
 
-	for k, _ := range c.spaces {
-		s.Keyspaces[k] = c.getKeyspaceStatus(k)
+	for k, space := range c.spaces {
+		s.Keyspaces[k] = space.size
 	}
 
 	return s

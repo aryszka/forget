@@ -20,7 +20,7 @@ bench: build
 	go test -cpuprofile cpu.out -memprofile mem.out -bench .
 
 gencover: build
-	go test -coverprofile cover.out
+	go test -test.short -coverprofile cover.out
 
 cover: gencover
 	go tool cover -func cover.out
