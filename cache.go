@@ -1,229 +1,371 @@
 package forget
 
-import "time"
+import (
+	"hash"
+	"hash/fnv"
+	"time"
+)
+
+const (
+	DefaultMaxSize     = 1 << 30
+	DefaultSegmentSize = 1 << 18
+)
 
 type segment struct {
-	index int
-	previous, next *segment
+	data               []byte
+	prevNode, nextNode node
 }
 
 type entry struct {
-	keyspace, key          string
-	firstSegment *segment
-	size int
-	expiration             time.Time
-	lessRecent, moreRecent *entry
+	hash uint64
+	firstSegment, lastSegment node
+	size Size
+	expiration         time.Time
+	prevNode, nextNode node
 }
 
 type keyspace struct {
-	lookup   map[string]*entry
-	lru, mru *entry
-	size     int
+	entries *list
+	lookup  map[uint64][]*entry
+	size Size
 }
 
 type cache struct {
-	maxSize int
-	spaces  map[string]*keyspace
+	maxSegments, segmentSize int
+	size Size
+	hashing                                hash.Hash64
+	data                                   *list
+	firstFree                              node
+	spaces                                 map[string]*keyspace
 }
 
-func (e *entry) size() int {
-	return len(e.key) + len(e.data)
+func (s *segment) prev() node     { return s.prevNode }
+func (s *segment) next() node     { return s.nextNode }
+func (s *segment) setPrev(n node) { s.prevNode = n }
+func (s *segment) setNext(n node) { s.nextNode = n }
+
+func (e *entry) prev() node     { return e.prevNode }
+func (e *entry) next() node     { return e.nextNode }
+func (e *entry) setPrev(n node) { e.prevNode = n }
+func (e *entry) setNext(n node) { e.nextNode = n }
+
+func initMemory(o Options) *list {
+	data := make([]byte, o.MaxSize)
+	segments := new(list)
+	for i := 0; i < o.MaxSize; i += o.SegmentSize {
+		segments.append(&segment{data: data[i : i+o.SegmentSize]})
+	}
+
+	return segments
 }
 
 func newCache(o Options) *cache {
+	if o.MaxSize <= 0 {
+		o.MaxSize = DefaultMaxSize
+	}
+
+	if o.SegmentSize <= 0 {
+		o.SegmentSize = DefaultSegmentSize
+	}
+
+	if o.SegmentSize > o.MaxSize {
+		o.SegmentSize = o.MaxSize
+	}
+
 	o.MaxSize -= o.MaxSize % o.SegmentSize
-	mem := make([][]byte, o.MaxSize / o.SegmentSize)
-	for i := 0; i < len(mem); i++ {
-		mem[i] = make([]byte, o.SegmentSize)
+
+	if o.Hash == nil {
+		o.Hash = fnv.New64a()
 	}
 
+	data := initMemory(o)
 	return &cache{
-		maxSize: o.MaxSize,
+		maxSegments: o.MaxSize / o.SegmentSize,
 		segmentSize: o.SegmentSize,
-		spaces:  make(map[string]*keyspace),
-		mem: mem,
+		hashing:     o.Hash,
+		data:        data,
+		firstFree:   data.first,
+		spaces:      make(map[string]*keyspace),
 	}
 }
 
-func (c *cache) remove(keyspace, key string) (*entry, bool) {
-	space, ok := c.spaces[keyspace]
-	if !ok {
-		return nil, false
+func (c *cache) hash(key string) uint64 {
+	c.hashing.Reset()
+	c.hashing.Write([]byte(key))
+	return c.hashing.Sum64()
+}
+
+func (c *cache) readWrite(e *entry, data []byte, offset int, write bool) {
+	var index, copied int
+	current := e.firstSegment
+	for copied < len(data) {
+		s := current.(*segment)
+		if index <= offset && offset < index+c.segmentSize {
+			from := offset - index
+			if write {
+				copied = copy(s.data[from:], data)
+			} else {
+				copied = copy(data, s.data[from:])
+			}
+		} else if index > offset {
+			if write {
+				copied += copy(s.data, data[copied:])
+			} else {
+				copied += copy(data[copied:], s.data)
+			}
+		}
+
+		current = current.next()
+		index += c.segmentSize
+	}
+}
+
+func (c *cache) readData(e *entry, offset, size int) []byte {
+	data := make([]byte, size)
+	c.readWrite(e, data, offset, false)
+	return data
+}
+
+func (c *cache) writeData(e *entry, offset int, data []byte) {
+	c.readWrite(e, data, offset, true)
+}
+
+func (c *cache) lookup(s *keyspace, hash uint64, key string) (*entry, bool) {
+	for _, e := range s.lookup[hash] {
+		currentKey := c.readData(e, 0, len(key))
+		if string(currentKey) == key {
+			return e, true
+		}
 	}
 
-	e, ok := space.lookup[key]
-	if !ok {
-		return nil, false
+	return nil, false
+}
+
+func (c *cache) deleteEntry(space *keyspace, e *entry) Size {
+	space.entries.remove(e)
+
+	if e.size.Segments > 0 {
+		if e.lastSegment.next() != c.firstFree {
+			c.data.removeRange(e.firstSegment, e.lastSegment)
+			c.data.insertRange(e.firstSegment, e.lastSegment, c.firstFree)
+		}
+
+		c.firstFree = e.firstSegment
 	}
 
-	space.size -= e.size()
-	delete(space.lookup, key)
+	hashEntries := space.lookup[e.hash]
+	for i, ei := range hashEntries {
+		if ei == e {
+			last := len(hashEntries) - 1
+			hashEntries[i], hashEntries[last], hashEntries = hashEntries[last], nil, hashEntries[:last]
+		}
+	}
 
+	sizeChange := Size{}.sub(e.size)
+	space.size = space.size.add(sizeChange)
+	c.size = c.size.add(sizeChange)
+
+	if len(hashEntries) > 0 {
+		space.lookup[e.hash] = hashEntries
+		return sizeChange
+	}
+
+	delete(space.lookup, e.hash)
 	if len(space.lookup) == 0 {
-		delete(c.spaces, keyspace)
-		return e, true
+		for k, s := range c.spaces {
+			if s == space {
+				delete(c.spaces, k)
+				break
+			}
+		}
 	}
 
-	if space.lru == e {
-		space.lru, e.moreRecent.lessRecent = e.moreRecent, nil
-	} else {
-		e.lessRecent.moreRecent = e.moreRecent
-	}
-
-	if space.mru == e {
-		space.mru, e.lessRecent.moreRecent = e.lessRecent, nil
-	} else {
-		e.moreRecent.lessRecent = e.lessRecent
-	}
-
-	return e, true
+	return sizeChange
 }
 
-func (c *cache) evict(currentSpace string, size int) (map[string][]string, int) {
-	if len(c.spaces) == 0 {
-		return nil, 0
+func (c *cache) requiredSegments(key string, data []byte) int {
+	l := len(key) + len(data)
+	n := l / c.segmentSize
+
+	if l%c.segmentSize == 0 {
+		return n
 	}
 
-	var (
-		totalSize, startSize, counter int
-		cspace                        *keyspace
-	)
+	return n + 1
+}
 
-	evicted := make(map[string][]string)
-	otherSpaces := make([]*keyspace, 0, len(c.spaces)-1)
+func (c *cache) allocate(kspace string, requiredSegments int) (node, node, map[string]int, Size) {
+	if requiredSegments == 0 {
+		return nil, nil, nil, Size{}
+	}
 
-	for k, space := range c.spaces {
-		totalSize += space.size
+	var sizeChange Size
+	evicted := make(map[string]int)
 
-		if k == currentSpace {
-			cspace = space
-		} else {
-			otherSpaces = append(otherSpaces, space)
+	if space, ok := c.spaces[kspace]; ok {
+		current := space.entries.first
+		for c.maxSegments-c.size.Segments < requiredSegments && current != nil {
+			sc := c.deleteEntry(space, current.(*entry))
+			sizeChange = sizeChange.add(sc)
+			evicted[kspace] += sc.Effective
+			current = current.next()
 		}
 	}
 
-	startSize = totalSize
-	for totalSize+size > c.maxSize {
-		if cspace != nil && len(cspace.lookup) > 0 {
-			totalSize -= cspace.lru.size()
-			evicted[cspace.lru.keyspace] = append(evicted[cspace.lru.keyspace], cspace.lru.key)
-			c.remove(cspace.lru.keyspace, cspace.lru.key)
-			continue
+	if c.maxSegments-c.size.Segments < requiredSegments {
+		spaces := make([]*keyspace, 0, len(c.spaces))
+		keys := make(map[*keyspace]string)
+		for k, s := range c.spaces {
+			spaces = append(spaces, s)
+			keys[s] = k
 		}
 
-		var other *keyspace
-		for other == nil || len(other.lookup) == 0 {
-			if other != nil {
-				otherSpaces = append(otherSpaces[:counter], otherSpaces[counter+1:]...)
-				counter %= len(otherSpaces)
+		var counter int
+		for c.maxSegments-c.size.Segments < requiredSegments {
+			var s *keyspace
+			for s == nil || s.entries.first == nil {
+				s := spaces[counter]
+				if s.entries.first == nil {
+					spaces = append(spaces[:counter], spaces[counter+1:]...)
+					counter %= len(spaces)
+				}
 			}
 
-			other = otherSpaces[counter]
+			sc := c.deleteEntry(s, s.entries.first.(*entry))
+			evicted[keys[s]] += sc.Effective
+			sizeChange = sizeChange.add(sc)
+			counter = (counter + 1) % len(spaces)
 		}
-
-		totalSize -= other.lru.size()
-		evicted[other.lru.keyspace] = append(evicted[other.lru.keyspace], other.lru.key)
-		c.remove(other.lru.keyspace, other.lru.key)
-		counter++
-		counter %= len(otherSpaces)
 	}
 
-	return evicted, totalSize - startSize
+	first, last := c.firstFree, c.firstFree
+	c.firstFree = last.next()
+	requiredSegments--
+	for requiredSegments > 0 {
+		last, c.firstFree = c.firstFree, c.firstFree.next()
+		requiredSegments--
+	}
+
+	return first, last, evicted, sizeChange
 }
 
-func (c *cache) append(e *entry) (map[string][]string, int) {
-	s := e.size()
-	evicted, sizeChange := c.evict(e.keyspace, s)
+func (c *cache) get(kspace, key string) ([]byte, bool, Size) {
+	var (
+		space  *keyspace
+		exists bool
+		e  *entry
+		sizeChange Size
+	)
 
-	space, ok := c.spaces[e.keyspace]
-	if !ok {
-		space = &keyspace{lookup: make(map[string]*entry)}
-		c.spaces[e.keyspace] = space
+	if space, exists = c.spaces[kspace]; !exists {
+		return nil, false, Size{}
 	}
 
-	space.size += s
-	sizeChange += s
-	space.lookup[e.key] = e
+	if e, exists = c.lookup(space, c.hash(key), key); !exists {
+		return nil, false, Size{}
+	}
 
-	if space.lru == nil {
-		space.lru, space.mru, e.lessRecent, e.moreRecent = e, e, nil, nil
+	if e.expiration.Before(time.Now()) {
+		sizeChange = c.deleteEntry(space, e)
+		return nil, false, sizeChange
+	}
+
+	space.entries.remove(e)
+	space.entries.append(e)
+	return c.readData(e, len(key), e.size.Effective), true, Size{}
+}
+
+func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[string]int, Size) {
+	var (
+		hash             uint64
+		space            *keyspace
+		exists           bool
+		e            *entry
+		requiredSegments int
+		scAlloc Size
+		evicted map[string]int
+		sizeChange Size
+	)
+
+	hash = c.hash(key)
+
+	if space, exists = c.spaces[kspace]; exists {
+		e, exists = c.lookup(space, hash, key)
+	}
+
+	requiredSegments = c.requiredSegments(key, data)
+	if requiredSegments > c.maxSegments {
+		if exists {
+			sizeChange = c.deleteEntry(space, e)
+		}
+
+		return nil, sizeChange
+	}
+
+	if exists {
+		space.entries.remove(e)
+		sizeChange = sizeChange.sub(e.size)
+		c.data.removeRange(e.firstSegment, e.lastSegment)
+		c.data.insertRange(e.firstSegment, e.lastSegment, c.firstFree)
 	} else {
-		space.mru.moreRecent, space.mru, e.lessRecent, e.moreRecent = e, e, space.mru, nil
+		e = &entry{hash: hash}
 	}
+
+	e.firstSegment, e.lastSegment, evicted, scAlloc = c.allocate(kspace, requiredSegments)
+	sizeChange = sizeChange.add(scAlloc)
+
+	e.size = Size{
+		Len: 1,
+		Segments: requiredSegments,
+		Effective: len(data),
+	}
+	sizeChange = sizeChange.add(e.size)
+	space.size = space.size.add(e.size)
+	c.size = c.size.add(e.size)
+
+	e.expiration = time.Now().Add(ttl)
+	c.writeData(e, 0, []byte(key))
+	c.writeData(e, len(key), data)
+	space.entries.append(e)
 
 	return evicted, sizeChange
 }
 
-func (c *cache) get(keyspace, key string) ([]byte, int, bool) {
-	e, ok := c.remove(keyspace, key)
-	if !ok {
-		return nil, 0, false
+func (c *cache) del(kspace, key string) Size {
+	var (
+		space *keyspace
+		exists bool
+		e *entry
+	)
+
+	if space, exists = c.spaces[kspace]; !exists {
+		return Size{}
 	}
 
-	if e.expiration.Before(time.Now()) {
-		return nil, -e.size(), false
+	if e, exists = c.lookup(space, c.hash(key), key); !exists {
+		return Size{}
 	}
 
-	c.append(e)
-	d := make([]byte, len(e.data))
-	copy(d, e.data)
-	return d, 0, true
+	return c.deleteEntry(space, e)
 }
 
-func (c *cache) set(keyspace, key string, data []byte, ttl time.Duration) (map[string][]string, int) {
-	var previousSize int
-	e, ok := c.remove(keyspace, key)
-	if ok {
-		previousSize = e.size()
-	} else {
-		e = &entry{keyspace: keyspace, key: key}
+func (c *cache) getKeyspaceStatus(kspace string) Size {
+	if space, ok := c.spaces[kspace]; ok {
+		return space.size
 	}
 
-	e.data = make([]byte, len(data))
-	copy(e.data, data)
-	if e.size() > c.maxSize {
-		return nil, -previousSize
-	}
-
-	e.expiration = time.Now().Add(ttl)
-	evicted, sizeChange := c.append(e)
-	return evicted, sizeChange - previousSize
-}
-
-func (c *cache) del(keyspace, key string) int {
-	if e, ok := c.remove(keyspace, key); ok {
-		return -e.size()
-	}
-
-	return 0
-}
-
-func getStatusOf(space *keyspace) *KeyspaceStatus {
-	s := &KeyspaceStatus{}
-	if space == nil {
-		return s
-	}
-
-	s.Len = len(space.lookup)
-	for _, e := range space.lookup {
-		s.Size += e.size()
-	}
-
-	return s
-}
-
-func (c *cache) getKeyspaceStatus(keyspace string) *KeyspaceStatus {
-	return getStatusOf(c.spaces[keyspace])
+	return Size{}
 }
 
 func (c *cache) getStatus() *Status {
-	cs := &Status{Keyspaces: make(map[string]*KeyspaceStatus)}
-	for k, space := range c.spaces {
-		s := getStatusOf(space)
-		cs.Keyspaces[k] = s
-		cs.Len += s.Len
-		cs.Size += s.Size
+	s := &Status{
+		Keyspaces: make(map[string]Size),
+		Size: c.size,
 	}
 
-	return cs
+	for k, _ := range c.spaces {
+		s.Keyspaces[k] = c.getKeyspaceStatus(k)
+	}
+
+	return s
 }

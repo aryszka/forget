@@ -22,7 +22,7 @@ func (s *SingleSpace) Del(key string) {
 	s.cache.Del("", key)
 }
 
-func (s *SingleSpace) Status() *KeyspaceStatus {
+func (s *SingleSpace) Status() Size {
 	return s.cache.StatusOf("")
 }
 

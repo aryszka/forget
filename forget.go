@@ -1,6 +1,9 @@
 package forget
 
-import "time"
+import (
+	"hash"
+	"time"
+)
 
 type messageType int
 
@@ -19,17 +22,17 @@ type message struct {
 	keyspace, key  string
 	data           []byte
 	ttl            time.Duration
-	keyspaceStatus *KeyspaceStatus
+	keyspaceStatus Size
 	status         *Status
 }
 
-type KeyspaceStatus struct {
-	Len, Size int
+type Size struct {
+	Len, Segments, Effective int
 }
 
 type Status struct {
-	Keyspaces map[string]*KeyspaceStatus
-	Len, Size int
+	Keyspaces map[string]Size
+	Size
 }
 
 type NotificationLevel int
@@ -53,8 +56,8 @@ type Notification struct {
 	Type          NotificationType
 	Status        *Status
 	Keyspace, Key string
-	Evicted       map[string][]string
-	SizeChange    int
+	Evicted       map[string]int
+	SizeChange    Size
 }
 
 type Cache struct {
@@ -67,19 +70,34 @@ type Cache struct {
 
 type Options struct {
 	MaxSize           int
-	SegmentSize int
+	SegmentSize       int
+	Hash              hash.Hash64
 	Notify            chan<- *Notification
 	NotificationLevel NotificationLevel
 }
 
+func (s Size) add(a Size) Size {
+	s.Len += a.Len
+	s.Segments += a.Segments
+	s.Effective += a.Effective
+	return s
+}
+
+func (s Size) sub(a Size) Size {
+	s.Len -= a.Len
+	s.Segments -= a.Segments
+	s.Effective -= a.Effective
+	return s
+}
+
+func (s Size) zero() bool {
+	return s.Len == 0 && s.Segments == 0 && s.Effective == 0
+}
+
 // notifiy channel not closed, but also no more sent
 func New(o Options) *Cache {
-	if o.MaxSize <= 0 {
-		o.MaxSize = 1 << 9
-	}
-
 	c := &Cache{
-		cache:             newCache(o.MaxSize),
+		cache:             newCache(o),
 		req:               make(chan message),
 		quit:              make(chan struct{}),
 		closed:            make(chan struct{}),
@@ -98,7 +116,7 @@ func (c *Cache) sendNotification(n *Notification) {
 	}
 }
 
-func (c *Cache) notifyHitMiss(keyspace, key string, hit bool, sizeChange int) {
+func (c *Cache) notifyHitMiss(keyspace, key string, hit bool, sizeChange Size) {
 	if c.notify == nil || c.notificationLevel < Moderate {
 		return
 	}
@@ -123,7 +141,7 @@ func (c *Cache) notifyHitMiss(keyspace, key string, hit bool, sizeChange int) {
 	c.sendNotification(n)
 }
 
-func (c *Cache) notifySet(keyspace, key string, evicted map[string][]string, sizeChange int) {
+func (c *Cache) notifySet(keyspace, key string, evicted map[string]int, sizeChange Size) {
 	if c.notify == nil {
 		return
 	}
@@ -132,7 +150,7 @@ func (c *Cache) notifySet(keyspace, key string, evicted map[string][]string, siz
 		return
 	}
 
-	if len(evicted) == 0 && sizeChange == 0 {
+	if len(evicted) == 0 && sizeChange.zero() {
 		return
 	}
 
@@ -153,8 +171,8 @@ func (c *Cache) notifySet(keyspace, key string, evicted map[string][]string, siz
 	c.sendNotification(n)
 }
 
-func (c *Cache) notifyDelete(keyspace, key string, sizeChange int) {
-	if c.notify == nil || c.notificationLevel < Verbose || sizeChange == 0 {
+func (c *Cache) notifyDelete(keyspace, key string, sizeChange Size) {
+	if c.notify == nil || c.notificationLevel < Verbose || sizeChange.zero() {
 		return
 	}
 
@@ -174,8 +192,8 @@ func (c *Cache) run() {
 			var rsp message
 			switch req.typ {
 			case getMsg:
-				var sizeChange int
-				rsp.data, sizeChange, rsp.ok = c.cache.get(req.keyspace, req.key)
+				var sizeChange Size
+				rsp.data, rsp.ok, sizeChange = c.cache.get(req.keyspace, req.key)
 				c.notifyHitMiss(req.keyspace, req.key, rsp.ok, sizeChange)
 			case setMsg:
 				evicted, sizeChange := c.cache.set(req.keyspace, req.key, req.data, req.ttl)
@@ -222,7 +240,7 @@ func (c *Cache) Del(keyspace, key string) {
 	c.request(message{typ: delMsg, keyspace: keyspace, key: key})
 }
 
-func (c *Cache) StatusOf(keyspace string) *KeyspaceStatus {
+func (c *Cache) StatusOf(keyspace string) Size {
 	rsp := c.request(message{typ: statusMsg, keyspace: keyspace})
 	return rsp.keyspaceStatus
 }
