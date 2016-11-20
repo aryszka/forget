@@ -17,6 +17,17 @@ type testDataItem struct {
 	evicted    map[string]int
 }
 
+type weakHash struct{}
+
+func (wh weakHash) Write(b []byte) (int, error) { return len(b), nil }
+func (wh weakHash) Sum(b []byte) []byte         { return b }
+func (wh weakHash) Reset()                      {}
+func (wh weakHash) Size() int                   { return 0 }
+func (wh weakHash) BlockSize() int              { return 1 }
+func (wh weakHash) Sum64() uint64               { return 42 }
+
+var testOptions = Options{MaxSize: 1 << 9, SegmentSize: 1 << 3}
+
 func createTestCacheWithSize(d testInit, o Options) *cache {
 	c := newCache(o)
 	for ks, s := range d {
@@ -29,7 +40,7 @@ func createTestCacheWithSize(d testInit, o Options) *cache {
 }
 
 func createTestCache(d testInit) *cache {
-	return createTestCacheWithSize(d, Options{MaxSize: 1 << 9, SegmentSize: 1 << 3})
+	return createTestCacheWithSize(d, testOptions)
 }
 
 func compareEvicted(got, expect map[string]int) bool {
@@ -373,7 +384,7 @@ func TestCacheDelete(t *testing.T) {
 }
 
 func TestCacheExpiration(t *testing.T) {
-	c := newCache(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := newCache(testOptions)
 	c.set("s1", "foo", []byte{1, 2, 3}, 24*time.Millisecond)
 	time.Sleep(12 * time.Millisecond)
 	c.get("s1", "foo")
@@ -688,7 +699,9 @@ func TestCacheEvict(t *testing.T) {
 }
 
 func TestCacheKeyspaceStatus(t *testing.T) {
-	c := newCache(Options{MaxSize: 1 << 9, SegmentSize: 6})
+	o := testOptions
+	o.SegmentSize = 6
+	c := newCache(o)
 
 	s := c.getKeyspaceStatus("s1")
 	if s.Len != 0 || s.Segments != 0 || s.Effective != 0 {
@@ -720,7 +733,9 @@ func TestCacheKeyspaceStatus(t *testing.T) {
 }
 
 func TestCacheStatus(t *testing.T) {
-	c := newCache(Options{MaxSize: 1 << 9, SegmentSize: 6})
+	o := testOptions
+	o.SegmentSize = 6
+	c := newCache(o)
 
 	s := c.getStatus()
 	if s.Len != 0 || s.Segments != 0 || s.Effective != 0 {
@@ -752,7 +767,7 @@ func TestCacheStatus(t *testing.T) {
 }
 
 func TestCopy(t *testing.T) {
-	c := newCache(Options{MaxSize: 1 << 9, SegmentSize: 6})
+	c := newCache(testOptions)
 	b := []byte{1, 2, 3}
 	c.set("s1", "foo", b, time.Hour)
 
@@ -766,5 +781,78 @@ func TestCopy(t *testing.T) {
 	b, _, _ = c.get("s1", "foo")
 	if b[0] != 1 {
 		t.Error("failed to copy on get")
+	}
+}
+
+func TestHashCollision(t *testing.T) {
+	o := testOptions
+	o.Hash = weakHash{}
+	c := newCache(o)
+
+	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+	c.set("s1", "bar", []byte{2, 3, 1}, time.Hour)
+	c.set("s1", "baz", []byte{3, 1, 2}, time.Hour)
+
+	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+		t.Error("failed to find colliding key")
+	}
+
+	if b, ok, _ := c.get("s1", "bar"); !ok || !bytes.Equal(b, []byte{2, 3, 1}) {
+		t.Error("failed to find colliding key")
+	}
+
+	if b, ok, _ := c.get("s1", "baz"); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
+		t.Error("failed to find colliding key")
+	}
+
+	c.del("s1", "bar")
+
+	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+		t.Error("failed to find colliding key")
+	}
+
+	if _, ok, _ := c.get("s1", "bar"); ok {
+		t.Error("failed to delete colliding key")
+	}
+
+	if b, ok, _ := c.get("s1", "baz"); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
+		t.Error("failed to find colliding key")
+	}
+}
+
+func TestEmptyItem(t *testing.T) {
+	c := newCache(testOptions)
+
+	c.set("", "", nil, time.Hour)
+	c.set("s1", "foo", []byte{3, 4, 5}, time.Hour)
+	if b, ok, _ := c.get("", ""); !ok || len(b) != 0 {
+		t.Error("failed to create empty item")
+	}
+	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{3, 4, 5}) {
+		t.Error("failed to create non-empty item after empty item")
+	}
+
+	c.del("", "")
+
+	if _, ok, _ := c.get("", ""); ok {
+		t.Error("failed to delete empty item")
+	}
+	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{3, 4, 5}) {
+		t.Error("failed to keep non-empty item")
+	}
+}
+
+func TestOverwritingLastItem(t *testing.T) {
+	c := newCache(testOptions)
+	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+	c.set("s1", "bar", []byte{2, 3, 1}, time.Hour)
+	c.set("s1", "bar", []byte{3, 1, 2}, time.Hour)
+
+	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+		t.Error("failed to find colliding key")
+	}
+
+	if b, ok, _ := c.get("s1", "bar"); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
+		t.Error("failed to find colliding key")
 	}
 }

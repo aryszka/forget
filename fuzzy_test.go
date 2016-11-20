@@ -10,6 +10,7 @@ const (
 	testDuration      = 3600 * time.Millisecond
 	procCount         = 12
 	cacheSize         = 1 << 15
+	segmentSize       = 180
 	keyspaceCount     = 30
 	keyCount          = 3000
 	minKeySpaceLength = 3

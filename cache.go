@@ -3,8 +3,6 @@ package forget
 import (
 	"hash"
 	"hash/fnv"
-	"log"
-	"os"
 	"time"
 )
 
@@ -59,10 +57,9 @@ func (e *entry) setPrev(n node) { e.prevNode = n }
 func (e *entry) setNext(n node) { e.nextNode = n }
 
 func initMemory(o Options) *list {
-	data := make([]byte, o.MaxSize)
 	segments := new(list)
 	for i := 0; i < o.MaxSize; i += o.SegmentSize {
-		segments.append(&segment{data: data[i : i+o.SegmentSize]})
+		segments.append(&segment{data: make([]byte, o.SegmentSize)})
 	}
 
 	return segments
@@ -122,14 +119,12 @@ func (c *cache) readWrite(e *entry, data []byte, offset int, mode dataMode) {
 			}
 
 			switch mode {
-			case dataRead:
-				to = data[copied:]
-				from = s.data[segmentIndex:]
 			case dataWrite:
 				to = s.data[segmentIndex:]
 				from = data[copied:]
 			default:
-				panic("invalid data access mode")
+				to = data[copied:]
+				from = s.data[segmentIndex:]
 			}
 
 			copied += copy(to, from)
@@ -259,15 +254,7 @@ func (c *cache) allocate(kspace string, requiredSegments int) (node, node, map[s
 	}
 
 	first, last := c.firstFree, c.firstFree
-	func() {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Println("error", err, last == nil, c.getStatus(), c.maxSegments, requiredSegments)
-				os.Exit(-1)
-			}
-		}()
-		c.firstFree = last.next()
-	}()
+	c.firstFree = last.next()
 	requiredSegments--
 	for requiredSegments > 0 {
 		last, c.firstFree = c.firstFree, c.firstFree.next()
