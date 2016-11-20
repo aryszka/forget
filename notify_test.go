@@ -28,7 +28,7 @@ func TestNotifyHitMiss(t *testing.T) {
 		c.Get("s1", "foo")
 		select {
 		case n := <-nc:
-			if n.Type != Miss || n.Keyspace != "s1" || n.Key != "foo" || n.SizeChange != -6 || n.Status == nil {
+			if n.Type != Miss || n.Keyspace != "s1" || n.Key != "foo" || n.SizeChange.Len != -1 || n.Status == nil {
 				t.Error("invalid notification")
 			}
 		default:
@@ -46,7 +46,7 @@ func TestNotifyHitMiss(t *testing.T) {
 		c.Get("s1", "foo")
 		select {
 		case n := <-nc:
-			if n.Type != Hit || n.Keyspace != "s1" || n.Key != "foo" || n.SizeChange != 0 || n.Status == nil {
+			if n.Type != Hit || n.Keyspace != "s1" || n.Key != "foo" || n.SizeChange.Len != 0 || n.Status == nil {
 				t.Error("invalid notification")
 			}
 		default:
@@ -77,7 +77,7 @@ func TestNotifySet(t *testing.T) {
 		c.Set("s1", "bar", []byte{1, 2, 3, 4, 5, 6}, time.Hour)
 		select {
 		case n := <-nc:
-			if n.Type != Eviction || n.Keyspace != "s1" || n.Key != "bar" || n.SizeChange != 3 || n.Status == nil {
+			if n.Type != Eviction || n.Keyspace != "s1" || n.Key != "bar" || n.SizeChange.Len != 0 || n.Status == nil {
 				t.Error("invalid notification")
 			}
 		default:
@@ -104,7 +104,7 @@ func TestNotifySet(t *testing.T) {
 		c.Set("s1", "bar", []byte{1, 2, 3}, time.Hour)
 		select {
 		case n := <-nc:
-			if n.Type != SizeChange || n.Keyspace != "s1" || n.Key != "bar" || n.SizeChange != 6 || n.Status == nil {
+			if n.Type != SizeChange || n.Keyspace != "s1" || n.Key != "bar" || n.SizeChange.Len != 1 || n.Status == nil {
 				t.Error("invalid notification")
 			}
 		default:
@@ -150,7 +150,7 @@ func TestNotifyDelete(t *testing.T) {
 		c.Del("s1", "foo")
 		select {
 		case n := <-nc:
-			if n.Type != SizeChange || n.Keyspace != "s1" || n.Key != "foo" || n.SizeChange != -9 || n.Status == nil {
+			if n.Type != SizeChange || n.Keyspace != "s1" || n.Key != "foo" || n.SizeChange.Len != -1 || n.Status == nil {
 				t.Error("invalid notification")
 			}
 		default:

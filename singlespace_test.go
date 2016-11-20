@@ -96,7 +96,7 @@ func TestSingleSpaceStatus(t *testing.T) {
 	defer c.Close()
 
 	s := c.Status()
-	if s == nil || s.Len != 0 || s.Size != 0 {
+	if s.Len != 0 || s.Segments != 0 || s.Effective != 0 {
 		t.Error("unexpected status")
 		return
 	}
@@ -108,7 +108,7 @@ func TestSingleSpaceStatus(t *testing.T) {
 	c.Set("quux", []byte{0, 1, 2}, time.Hour)
 
 	s = c.Status()
-	if s == nil || s.Len != 5 || s.Size != 31 {
+	if s.Len != 5 || s.Segments != 0 || s.Effective != 31 {
 		t.Error("unexpected status")
 		return
 	}

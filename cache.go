@@ -17,26 +17,26 @@ type segment struct {
 }
 
 type entry struct {
-	hash uint64
+	hash                      uint64
 	firstSegment, lastSegment node
-	size Size
-	expiration         time.Time
-	prevNode, nextNode node
+	size                      Size
+	expiration                time.Time
+	prevNode, nextNode        node
 }
 
 type keyspace struct {
 	entries *list
 	lookup  map[uint64][]*entry
-	size Size
+	size    Size
 }
 
 type cache struct {
 	maxSegments, segmentSize int
-	size Size
-	hashing                                hash.Hash64
-	data                                   *list
-	firstFree                              node
-	spaces                                 map[string]*keyspace
+	size                     Size
+	hashing                  hash.Hash64
+	data                     *list
+	firstFree                node
+	spaces                   map[string]*keyspace
 }
 
 func (s *segment) prev() node     { return s.prevNode }
@@ -251,9 +251,9 @@ func (c *cache) allocate(kspace string, requiredSegments int) (node, node, map[s
 
 func (c *cache) get(kspace, key string) ([]byte, bool, Size) {
 	var (
-		space  *keyspace
-		exists bool
-		e  *entry
+		space      *keyspace
+		exists     bool
+		e          *entry
 		sizeChange Size
 	)
 
@@ -280,11 +280,11 @@ func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[str
 		hash             uint64
 		space            *keyspace
 		exists           bool
-		e            *entry
+		e                *entry
 		requiredSegments int
-		scAlloc Size
-		evicted map[string]int
-		sizeChange Size
+		scAlloc          Size
+		evicted          map[string]int
+		sizeChange       Size
 	)
 
 	hash = c.hash(key)
@@ -309,14 +309,20 @@ func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[str
 		c.data.insertRange(e.firstSegment, e.lastSegment, c.firstFree)
 	} else {
 		e = &entry{hash: hash}
+		if space == nil {
+			space = &keyspace{entries: new(list), lookup: make(map[uint64][]*entry)}
+			c.spaces[kspace] = space
+		}
+
+		space.lookup[hash] = append(space.lookup[hash], e)
 	}
 
 	e.firstSegment, e.lastSegment, evicted, scAlloc = c.allocate(kspace, requiredSegments)
 	sizeChange = sizeChange.add(scAlloc)
 
 	e.size = Size{
-		Len: 1,
-		Segments: requiredSegments,
+		Len:       1,
+		Segments:  requiredSegments,
 		Effective: len(data),
 	}
 	sizeChange = sizeChange.add(e.size)
@@ -333,9 +339,9 @@ func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[str
 
 func (c *cache) del(kspace, key string) Size {
 	var (
-		space *keyspace
+		space  *keyspace
 		exists bool
-		e *entry
+		e      *entry
 	)
 
 	if space, exists = c.spaces[kspace]; !exists {
@@ -360,7 +366,7 @@ func (c *cache) getKeyspaceStatus(kspace string) Size {
 func (c *cache) getStatus() *Status {
 	s := &Status{
 		Keyspaces: make(map[string]Size),
-		Size: c.size,
+		Size:      c.size,
 	}
 
 	for k, _ := range c.spaces {
