@@ -16,7 +16,7 @@ data with keys and keyspaces.
 - supports TTL based expiration, where every item can have a different TTL;
 - evicts the least recently used item from the cache when there is no more space for new items (LRU);
 - evicts first the items in the keyspace of the new item, fitting this way less frequently accessed but more
-  expensive recources next to frequently accessed but cheaper ones, staying within the same memory limit;
+  expensive recources next to frequently accessed but cheaper ones, staying within a shared memory limit;
 - provides continuous usage statistics for monitoring health and performance;
 - supports to run any number of instances in a process with different configuration, if needed;
 - is small, thread safe, executes all operations in constant time, doesn't have dependencies other than the Go
