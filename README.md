@@ -6,7 +6,7 @@
 Forget is a library providing in-memory caching. It can be used as a safe, in-process cache for storing binary
 data with keys and keyspaces.
 
-### It:
+It:
 
 - uses a hard memory limit for the combined byte size of the cached items;
 - preallocates the maximum required memory in advance, no further, large allocations required;
@@ -18,8 +18,6 @@ data with keys and keyspaces.
   expensive recources next to frequently accessed but cheaper ones, staying within a shared memory limit;
 - provides continuous usage statistics for monitoring health and performance;
 - supports to run any number of instances in a process with different configuration, if needed;
-- is small, thread safe, executes all operations in constant time, doesn't have dependencies other than the Go
-  stdlib, etc.
 
 ### Documentation:
 
