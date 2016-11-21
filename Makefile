@@ -35,7 +35,7 @@ showcover: gencover
 	go tool cover -html cover.out
 
 fmt:
-	go fmt
+	gofmt -w -s ./*.go
 
 vet:
 	go vet

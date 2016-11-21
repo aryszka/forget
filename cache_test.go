@@ -84,12 +84,12 @@ func TestCacheGet(t *testing.T) {
 		"not found key",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 		},
 		testDataItem{
@@ -100,12 +100,12 @@ func TestCacheGet(t *testing.T) {
 		"key found",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 		},
 		testDataItem{
@@ -165,8 +165,8 @@ func TestCacheSet(t *testing.T) {
 		"set in addition, new space",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 		},
 		testDataItem{
@@ -198,11 +198,11 @@ func TestCacheSet(t *testing.T) {
 		"set in addition, same space",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
+				"foo": {1, 2, 3},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 		},
 		testDataItem{
@@ -236,12 +236,12 @@ func TestCacheSet(t *testing.T) {
 		"overwrite",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 		},
 		testDataItem{
@@ -300,12 +300,12 @@ func TestCacheDelete(t *testing.T) {
 		"not found key",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 		},
 		testDataItem{
@@ -337,12 +337,12 @@ func TestCacheDelete(t *testing.T) {
 		"delete",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 		},
 		testDataItem{
@@ -425,12 +425,12 @@ func TestCacheEvict(t *testing.T) {
 		"no evict",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 		},
 		40,
@@ -472,12 +472,12 @@ func TestCacheEvict(t *testing.T) {
 		"evict from own space",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 		},
 		32,
@@ -515,16 +515,16 @@ func TestCacheEvict(t *testing.T) {
 		"evict from other spaces",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
-				"bar": []byte{4, 5, 6},
+				"foo": {1, 2, 3},
+				"bar": {4, 5, 6},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 			"s3": map[string][]byte{
-				"foo": []byte{3, 4, 5},
-				"qux": []byte{6, 7, 8},
+				"foo": {3, 4, 5},
+				"qux": {6, 7, 8},
 			},
 		},
 		48,
@@ -573,16 +573,16 @@ func TestCacheEvict(t *testing.T) {
 		"zero another space",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
+				"foo": {1, 2, 3},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 			"s3": map[string][]byte{
-				"foo": []byte{3, 4, 5},
-				"bar": []byte{6, 7, 8},
-				"baz": []byte{9, 0, 1},
+				"foo": {3, 4, 5},
+				"bar": {6, 7, 8},
+				"baz": {9, 0, 1},
 			},
 		},
 		48,
@@ -629,16 +629,16 @@ func TestCacheEvict(t *testing.T) {
 		"zero all spaces",
 		testInit{
 			"s1": map[string][]byte{
-				"foo": []byte{1, 2, 3},
+				"foo": {1, 2, 3},
 			},
 			"s2": map[string][]byte{
-				"baz": []byte{7, 8, 9},
-				"qux": []byte{0, 1, 2},
+				"baz": {7, 8, 9},
+				"qux": {0, 1, 2},
 			},
 			"s3": map[string][]byte{
-				"foo": []byte{3, 4, 5},
-				"bar": []byte{6, 7, 8},
-				"baz": []byte{9, 0, 1},
+				"foo": {3, 4, 5},
+				"bar": {6, 7, 8},
+				"baz": {9, 0, 1},
 			},
 		},
 		48,

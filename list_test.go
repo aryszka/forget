@@ -252,21 +252,21 @@ func TestListInsertRange(t *testing.T) {
 		checkList(t, l, 1, 2, 4, 3)
 	})
 
-	t.Run("mulitple items into a list with multiple items, before", func(t *testing.T) {
+	t.Run("multiple items into a list with multiple items, before", func(t *testing.T) {
 		l := initList(1, 2, 3)
 		insert := initList(4, 5, 6)
 		l.insertRange(insert.first, insert.last, l.first)
 		checkList(t, l, 4, 5, 6, 1, 2, 3)
 	})
 
-	t.Run("mulitple items into a list with multiple items, after", func(t *testing.T) {
+	t.Run("multiple items into a list with multiple items, after", func(t *testing.T) {
 		l := initList(1, 2, 3)
 		insert := initList(4, 5, 6)
 		l.insertRange(insert.first, insert.last, nil)
 		checkList(t, l, 1, 2, 3, 4, 5, 6)
 	})
 
-	t.Run("mulitple items into a list with multiple items, between", func(t *testing.T) {
+	t.Run("multiple items into a list with multiple items, between", func(t *testing.T) {
 		l := initList(1, 2, 3)
 		insert := initList(4, 5, 6)
 		l.insertRange(insert.first, insert.last, l.first.next().next())
