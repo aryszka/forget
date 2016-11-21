@@ -7,7 +7,7 @@
 Forget is a library providing in-memory caching. It can be used as a safe, in-process cache for storing binary
 data with keys and keyspaces.
 
-It:
+### It:
 
 - uses a hard memory limit for the combined byte size of the cached items;
 - preallocates the maximum required memory in advance, no further, large allocations required;
@@ -22,13 +22,13 @@ It:
 - is small, thread safe, executes all operations in constant time, doesn't have dependencies other than the Go
   stdlib, etc.
 
-Documentation:
+### Documentation:
 
 More details about the usage and the package description can be found here:
 
 [https://godoc.org/github.com/aryszka/forget](https://godoc.org/github.com/aryszka/forget)
 
-Example:
+### Example:
 
 ```
 c := forget.New(forget.Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
@@ -45,7 +45,7 @@ if d, ok := c.Get("pages", "/article-one"); ok {
 }
 ```
 
-Installation:
+### Installation:
 
 ```
 go get github.com/aryszka/forget
