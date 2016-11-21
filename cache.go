@@ -7,8 +7,15 @@ import (
 )
 
 const (
-	DefaultMaxSize     = 1 << 30
-	DefaultSegmentSize = 1 << 18
+
+	// DefaultMaxSize defines the maximum total size of items and their
+	// keys stored in the cache if it is not specified in the
+	// initialization options.
+	DefaultMaxSize = 1 << 30
+
+	// DefaultSegmentSize defines the used segment size if it is not
+	// defined in the initialization options.
+	DefaultSegmentSize = 1 << 15
 )
 
 type dataMode int
