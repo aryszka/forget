@@ -1,7 +1,10 @@
 package forget_test
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"time"
 
 	"github.com/aryszka/forget"
@@ -23,6 +26,26 @@ func Example() {
 
 	// Output:
 	// This is cached.
+}
+
+func ExampleCache_stream() {
+	c := forget.New(forget.Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	defer c.Close()
+
+	b := bytes.NewBufferString("Hello, world!")
+	w := c.Set("pages", "/home", b.Len(), time.Minute)
+	if _, err := io.Copy(w, b); err != nil {
+		fmt.Println(err)
+	}
+
+	if r, ok := c.Get("pages", "/home"); !ok {
+		fmt.Println("cached content not found")
+	} else {
+		io.Copy(os.Stdout, r)
+	}
+
+	// Output:
+	// Hello, world!
 }
 
 func ExampleNotification() {
