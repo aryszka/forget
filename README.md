@@ -1,5 +1,6 @@
 [![GoDoc](https://godoc.org/github.com/aryszka/forget?status.svg)](https://godoc.org/github.com/aryszka/forget)
 [![Go Report Card](https://goreportcard.com/badge/github.com/aryszka/forget)](https://goreportcard.com/report/github.com/aryszka/forget)
+[![Coverage](http://gocover.io/_badge/github.com/aryszka/forget)](http://gocover.io/github.com/aryszka/forget)
 
 # Forget
 
