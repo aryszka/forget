@@ -9,17 +9,17 @@ data with keys and keyspaces.
 
 It:
 
-- uses a hard memory limit for the combined byte size of the cached items;
-- preallocates the maximum required memory in advance, no further, large allocations required;
+- uses a hard memory limit for the combined byte size of the cached data;
+- preallocates the maximum required memory in advance;
 - uses keys and keyspaces to identify cached items, so that a key can appear in multiple keyspaces with
   different cached data; 
-- supports concurrent, streaming-style read and write of the cached items;
+- supports concurrent, streaming-style read and write of the cached data;
 - supports TTL based expiration, where every item can have a different TTL;
 - evicts the least recently used item from the cache when there is no more space for new items (LRU);
 - evicts first the items in the keyspace of the new item, fitting this way less frequently accessed but more
   expensive recources next to frequently accessed but cheaper ones, staying within a shared memory limit;
 - provides continuous usage statistics for monitoring health and performance;
-- supports to run any number of instances in a process with different configuration, if needed;
+- supports to run any number of instances in a process with different configuration;
 
 ### Documentation:
 
