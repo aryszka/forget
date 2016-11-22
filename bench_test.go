@@ -7,12 +7,12 @@ func benchmarkGet(b *testing.B, n int) {
 	defer c.Close()
 
 	for i := 0; i < n; i++ {
-		c.Set(randomKeySpace(), randomKey(), randomData(), randomTTL())
+		c.SetBytes(randomKeySpace(), randomKey(), randomData(), randomTTL())
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		c.Get(randomKeySpace(), randomKey())
+		c.GetBytes(randomKeySpace(), randomKey())
 	}
 }
 
@@ -21,12 +21,12 @@ func benchmarkSet(b *testing.B, n int) {
 	defer c.Close()
 
 	for i := 0; i < n; i++ {
-		c.Set(randomKeySpace(), randomKey(), randomData(), randomTTL())
+		c.SetBytes(randomKeySpace(), randomKey(), randomData(), randomTTL())
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		c.Set(randomKeySpace(), randomKey(), randomData(), randomTTL())
+		c.SetBytes(randomKeySpace(), randomKey(), randomData(), randomTTL())
 	}
 }
 

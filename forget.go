@@ -1,7 +1,9 @@
 package forget
 
 import (
+	"bytes"
 	"hash"
+	"io"
 	"time"
 )
 
@@ -21,6 +23,8 @@ type message struct {
 	ok             bool
 	keyspace, key  string
 	data           []byte
+	size           int
+	io             io.ReadWriter
 	ttl            time.Duration
 	keyspaceStatus Size
 	status         *Status
@@ -131,6 +135,7 @@ type Cache struct {
 	quit, closed      chan struct{}
 	notificationLevel NotificationLevel
 	notify            chan<- *Notification
+	io                chan ioMessage
 }
 
 // Options are used to pass in initialization options to a cache
@@ -189,6 +194,7 @@ func New(o Options) *Cache {
 		closed:            make(chan struct{}),
 		notify:            o.Notify,
 		notificationLevel: o.NotificationLevel,
+		io:                make(chan ioMessage),
 	}
 
 	go c.run()
@@ -279,11 +285,20 @@ func (c *Cache) run() {
 			switch req.typ {
 			case getMsg:
 				var sizeChange Size
-				rsp.data, rsp.ok, sizeChange = c.cache.get(req.keyspace, req.key)
+				// rsp.data, rsp.ok, sizeChange = c.cache.get(req.keyspace, req.key)
+				var e *entry
+				e, rsp.ok, sizeChange = c.cache.get(req.keyspace, req.key)
 				c.notifyHitMiss(req.keyspace, req.key, rsp.ok, sizeChange)
+				if rsp.ok {
+					rsp.io = &rw{req: c.io, entry: e, offset: len(req.key), quit: c.quit}
+				}
 			case setMsg:
-				evicted, sizeChange := c.cache.set(req.keyspace, req.key, req.data, req.ttl)
+				e, ok, evicted, sizeChange := c.cache.set(req.keyspace, req.key, req.size, req.ttl)
+				rsp.ok = ok
 				c.notifySet(req.keyspace, req.key, evicted, sizeChange)
+				if ok {
+					rsp.io = &rw{req: c.io, entry: e, offset: len(req.key), quit: c.quit}
+				}
 			case delMsg:
 				sizeChange := c.cache.del(req.keyspace, req.key)
 				c.notifyDelete(req.keyspace, req.key, sizeChange)
@@ -294,6 +309,21 @@ func (c *Cache) run() {
 			}
 
 			req.response <- rsp
+		case req := <-c.io:
+			switch req.typ {
+			case readMsg:
+				rsp := ioMessage{}
+				rsp.count, rsp.err = c.cache.read(req.entry, req.offset, req.buffer)
+				if rsp.count == 0 && rsp.err == nil {
+					req.entry.wait = append(req.entry.wait, req.wait)
+				}
+
+				req.response <- rsp
+			case writeMsg:
+				rsp := ioMessage{}
+				rsp.count, rsp.err = c.cache.write(req.entry, req.offset, req.buffer)
+				req.response <- rsp
+			}
 		case <-c.quit:
 			close(c.closed)
 			return
@@ -313,18 +343,55 @@ func (c *Cache) request(req message) message {
 	return <-req.response
 }
 
-// Get retrieves a cached item from the cache. The second return
-// argument indicates if the item was found in the cache. It is safe to
-// modify or received byte slice, it won't change the cached data.
-func (c *Cache) Get(keyspace, key string) ([]byte, bool) {
+// Get retrieves a reader to a cached item from the cache. The second
+// return argument indicates if the item was found in the cache. Get
+// returns reader to the item if it was set, even if the writing its was
+// not yet finished, and it can be used anytime to read from it. The
+// reader blocks if the read reaches the point that the writer didn't
+// pass yet. The reader returns ErrCacheClosed if the cache was closed
+// and ErrItemDiscarded if the original item with the given keyspace and
+// key is not available anymore.
+func (c *Cache) Get(keyspace, key string) (io.Reader, bool) {
 	rsp := c.request(message{typ: getMsg, keyspace: keyspace, key: key})
-	return rsp.data, rsp.ok
+	return rsp.io, rsp.ok
 }
 
-// Set sets a new item or overwrites an existing one in the cache. It is
-// safe to modify or received byte slice, it won't change the cached data.
-func (c *Cache) Set(keyspace, key string, data []byte, ttl time.Duration) {
-	c.request(message{typ: setMsg, keyspace: keyspace, key: key, data: data, ttl: ttl})
+// GetBytes retrieves a cached item from the cache. The second return
+// argument indicates if the item was found in the cache. It is safe to
+// modify the received byte slice, it won't change the cached data.
+func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
+	r, ok := c.Get(keyspace, key)
+	if !ok {
+		return nil, false
+	}
+
+	b := bytes.NewBuffer(nil)
+	io.Copy(b, r)
+	return b.Bytes(), true
+}
+
+// Set allocates a cache item in the cache and returns a writer that can
+// be used to store the assocated data. The writer returns
+// ErrCacheClosed if the cache was closed, ErrItemDiscarded if the
+// original item with the given keyspace and key is not available
+// anymore, and ErrWriteLimit if the passed in buffer is larger than the
+// allocated space minus the current write position.
+func (c *Cache) Set(keyspace, key string, size int, ttl time.Duration) io.Writer {
+	rsp := c.request(message{typ: setMsg, keyspace: keyspace, key: key, size: size, ttl: ttl})
+	if rsp.io == nil {
+		rsp.io = discardedIO
+	}
+
+	return rsp.io
+}
+
+// SetBytes sets a new item or overwrites an existing one in the cache.
+// It is safe to modify used byte slice after set, it won't change the
+// cached data.
+func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) {
+	w := c.Set(keyspace, key, len(data), ttl)
+	b := bytes.NewBuffer(data)
+	io.Copy(w, b)
 }
 
 // Del removes an item from the cache.

@@ -2,6 +2,7 @@ package forget
 
 import (
 	"bytes"
+	"io"
 	"testing"
 	"time"
 )
@@ -32,7 +33,8 @@ func createTestCacheWithSize(d testInit, o Options) *cache {
 	c := newCache(o)
 	for ks, s := range d {
 		for k, dk := range s {
-			c.set(ks, k, dk, time.Hour)
+			e, _, _, _ := c.set(ks, k, len(dk), time.Hour)
+			c.write(e, 3, dk)
 		}
 	}
 
@@ -57,13 +59,47 @@ func compareEvicted(got, expect map[string]int) bool {
 	return true
 }
 
+func readNToEnd(c *cache, e *entry, offset, count int) ([]byte, bool) {
+	p := make([]byte, count)
+	if count > 0 {
+		if n, err := c.read(e, offset, p); n != count || err != nil {
+			return p, false
+		}
+	}
+
+	if _, err := c.read(e, offset+count, make([]byte, count)); err != io.EOF {
+		return p, false
+	}
+
+	return p, true
+}
+
+func writeNFull(c *cache, e *entry, offset int, data []byte) bool {
+	if n, err := c.write(e, offset, data); n != len(data) || err != nil {
+		return false
+	}
+
+	if _, err := c.write(e, offset+len(data), []byte{1, 2, 3}); err != ErrWriteLimit {
+		return false
+	}
+
+	return true
+}
+
 func checkData(t *testing.T, items []testDataItem, c *cache) {
 	for _, i := range items {
-		if d, ok, _ := c.get(i.space, i.key); ok != i.ok {
+		e, ok, _ := c.get(i.space, i.key)
+		if ok != i.ok {
 			t.Error("unexpected response status", i.space, i.key, ok, i.ok)
 			return
-		} else if !bytes.Equal(d, i.data) {
-			t.Error("invalid response data", i.space, i.key, d, i.data)
+		}
+
+		if !ok {
+			return
+		}
+
+		if b, ok := readNToEnd(c, e, len(i.key), len(i.data)); !ok || !bytes.Equal(b, i.data) {
+			t.Error("failed to read from entry")
 		}
 	}
 }
@@ -117,14 +153,18 @@ func TestCacheGet(t *testing.T) {
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := createTestCache(ti.init)
-			d, ok, _ := c.get(ti.space, ti.key)
+			e, ok, _ := c.get(ti.space, ti.key)
 
 			if ok != ti.ok {
 				t.Error("unexpected response status", ok, ti.ok)
 				return
 			}
 
-			if !bytes.Equal(d, ti.data) {
+			if !ok {
+				return
+			}
+
+			if d, ok := readNToEnd(c, e, len(ti.key), len(ti.data)); !ok || !bytes.Equal(d, ti.data) {
 				t.Error("invalid response data", d, ti.data)
 			}
 		})
@@ -273,9 +313,17 @@ func TestCacheSet(t *testing.T) {
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := createTestCache(ti.init)
-			_, sizeChange := c.set(ti.space, ti.key, ti.data, time.Hour)
+			e, ok, _, sizeChange := c.set(ti.space, ti.key, len(ti.data), time.Hour)
+			if !ok {
+				t.Error("failed to set entry")
+			}
+
 			if sizeChange != ti.sizeChange {
 				t.Error("invalid size change", sizeChange, ti.sizeChange)
+			}
+
+			if !writeNFull(c, e, len(ti.key), ti.data) {
+				t.Error("failed to write data")
 			}
 
 			checkData(t, ti.checks, c)
@@ -385,7 +433,13 @@ func TestCacheDelete(t *testing.T) {
 
 func TestCacheExpiration(t *testing.T) {
 	c := newCache(testOptions)
-	c.set("s1", "foo", []byte{1, 2, 3}, 24*time.Millisecond)
+
+	if e, ok, _, _ := c.set("s1", "foo", 3, 24*time.Millisecond); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{1, 2, 3}) {
+		t.Error("failed to write entry data")
+	}
+
 	time.Sleep(12 * time.Millisecond)
 	c.get("s1", "foo")
 	time.Sleep(24 * time.Millisecond)
@@ -396,9 +450,16 @@ func TestCacheExpiration(t *testing.T) {
 
 func TestCacheOversize(t *testing.T) {
 	c := newCache(Options{MaxSize: 8, SegmentSize: 2})
-	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
 
-	if evicted, sizeChange := c.set("s1", "foo", []byte{1, 2, 3, 4, 5, 6}, time.Hour); len(evicted) != 0 || sizeChange.zero() {
+	if e, ok, _, _ := c.set("s1", "foo", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{1, 2, 3}) {
+		t.Error("failed to write entry data")
+	}
+
+	if _, ok, evicted, sizeChange := c.set("s1", "foo", 6, time.Hour); ok {
+		t.Error("unxpected successful set of oversized entry")
+	} else if len(evicted) != 0 || sizeChange.zero() {
 		t.Error("unexpected set success", len(evicted), sizeChange)
 	}
 
@@ -686,10 +747,12 @@ func TestCacheEvict(t *testing.T) {
 				c.get(s, k)
 			}
 
-			if evicted, sizeChange := c.set(ti.space, ti.key, ti.data, time.Hour); sizeChange != ti.sizeChange {
-				t.Error("invalid size change", sizeChange, ti.sizeChange)
+			if e, ok, evicted, sizeChange := c.set(ti.space, ti.key, len(ti.data), time.Hour); !ok {
+				t.Error("failed to set entry")
+			} else if !writeNFull(c, e, len(ti.key), ti.data) {
+				t.Error("failed to write entry data")
 			} else if !compareEvicted(evicted, ti.evicted) {
-				t.Error("invalid evicted", evicted, ti.evicted)
+				t.Error("unexpected set success", len(evicted), sizeChange)
 			}
 
 			checkData(t, ti.checks, c)
@@ -709,11 +772,35 @@ func TestCacheKeyspaceStatus(t *testing.T) {
 		return
 	}
 
-	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
-	c.set("s1", "bar", []byte{3, 4, 5}, time.Hour)
-	c.set("s2", "baz", []byte{7, 8, 9}, time.Hour)
-	c.set("s2", "qux", []byte{0, 1, 2}, time.Hour)
-	c.set("s2", "quux", []byte{0, 1, 2}, time.Hour)
+	if e, ok, _, _ := c.set("s1", "foo", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{1, 2, 3}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s1", "bar", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{3, 4, 5}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s2", "baz", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{7, 8, 9}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s2", "qux", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{0, 1, 2}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s2", "quux", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 4, []byte{0, 1, 2}) {
+		t.Error("failed to write entry data")
+	}
 
 	s = c.getKeyspaceStatus("s1")
 	if s.Len != 2 || s.Segments != 2 || s.Effective != 12 {
@@ -743,11 +830,35 @@ func TestCacheStatus(t *testing.T) {
 		return
 	}
 
-	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
-	c.set("s1", "bar", []byte{3, 4, 5}, time.Hour)
-	c.set("s2", "baz", []byte{7, 8, 9}, time.Hour)
-	c.set("s2", "qux", []byte{0, 1, 2}, time.Hour)
-	c.set("s2", "quux", []byte{0, 1, 2}, time.Hour)
+	if e, ok, _, _ := c.set("s1", "foo", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{1, 2, 3}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s1", "bar", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{3, 4, 5}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s2", "baz", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{7, 8, 9}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s2", "qux", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{0, 1, 2}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s2", "quux", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 4, []byte{0, 1, 2}) {
+		t.Error("failed to write entry data")
+	}
 
 	s = c.getStatus()
 	if s.Len != 5 || s.Segments != 6 || s.Effective != 31 {
@@ -769,16 +880,29 @@ func TestCacheStatus(t *testing.T) {
 func TestCopy(t *testing.T) {
 	c := newCache(testOptions)
 	b := []byte{1, 2, 3}
-	c.set("s1", "foo", b, time.Hour)
+	if e, ok, _, _ := c.set("s1", "foo", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, b) {
+		t.Error("failed to write entry data")
+	}
 
 	b[0] = 4
-	b, _, _ = c.get("s1", "foo")
+	if e, ok, _ := c.get("s1", "foo"); !ok {
+		t.Error("failed to get entry")
+	} else if b, ok = readNToEnd(c, e, 3, 3); !ok {
+		t.Error("failed to read data")
+	}
+
 	if b[0] != 1 {
 		t.Error("failed to copy on set")
 	}
 
 	b[2] = 1
-	b, _, _ = c.get("s1", "foo")
+	if e, ok, _ := c.get("s1", "foo"); !ok {
+		t.Error("failed to get entry")
+	} else if b, ok = readNToEnd(c, e, 3, 3); !ok {
+		t.Error("failed to read data")
+	}
 	if b[0] != 1 {
 		t.Error("failed to copy on get")
 	}
@@ -789,33 +913,57 @@ func TestHashCollision(t *testing.T) {
 	o.Hash = weakHash{}
 	c := newCache(o)
 
-	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
-	c.set("s1", "bar", []byte{2, 3, 1}, time.Hour)
-	c.set("s1", "baz", []byte{3, 1, 2}, time.Hour)
+	if e, ok, _, _ := c.set("s1", "foo", 3, time.Hour); !ok {
+		t.Error("failed to set colliding entry")
+	} else if !writeNFull(c, e, 3, []byte{1, 2, 3}) {
+		t.Error("failed to write colliding entry data")
+	}
 
-	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+	if e, ok, _, _ := c.set("s1", "bar", 3, time.Hour); !ok {
+		t.Error("failed to set colliding entry")
+	} else if !writeNFull(c, e, 3, []byte{2, 3, 1}) {
+		t.Error("failed to write colliding entry data")
+	}
+
+	if e, ok, _, _ := c.set("s1", "baz", 3, time.Hour); !ok {
+		t.Error("failed to set colliding entry")
+	} else if !writeNFull(c, e, 3, []byte{3, 1, 2}) {
+		t.Error("failed to write colliding entry data")
+	}
+
+	if e, ok, _ := c.get("s1", "foo"); !ok {
+		t.Error("failed to get colliding entry")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
 		t.Error("failed to find colliding key")
 	}
 
-	if b, ok, _ := c.get("s1", "bar"); !ok || !bytes.Equal(b, []byte{2, 3, 1}) {
+	if e, ok, _ := c.get("s1", "bar"); !ok {
+		t.Error("failed to get colliding entry")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{2, 3, 1}) {
 		t.Error("failed to find colliding key")
 	}
 
-	if b, ok, _ := c.get("s1", "baz"); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
+	if e, ok, _ := c.get("s1", "baz"); !ok {
+		t.Error("failed to get colliding entry")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
 		t.Error("failed to find colliding key")
 	}
 
 	c.del("s1", "bar")
 
-	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+	if e, ok, _ := c.get("s1", "foo"); !ok {
+		t.Error("failed to get colliding entry")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
 		t.Error("failed to find colliding key")
 	}
 
 	if _, ok, _ := c.get("s1", "bar"); ok {
-		t.Error("failed to delete colliding key")
+		t.Error("failed to delete colliding entry")
 	}
 
-	if b, ok, _ := c.get("s1", "baz"); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
+	if e, ok, _ := c.get("s1", "baz"); !ok {
+		t.Error("failed to get colliding entry")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
 		t.Error("failed to find colliding key")
 	}
 }
@@ -823,13 +971,26 @@ func TestHashCollision(t *testing.T) {
 func TestEmptyItem(t *testing.T) {
 	c := newCache(testOptions)
 
-	c.set("", "", nil, time.Hour)
-	c.set("s1", "foo", []byte{3, 4, 5}, time.Hour)
-	if b, ok, _ := c.get("", ""); !ok || len(b) != 0 {
+	if _, ok, _, _ := c.set("", "", 0, time.Hour); !ok {
 		t.Error("failed to create empty item")
 	}
-	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{3, 4, 5}) {
+
+	if e, ok, _, _ := c.set("s1", "foo", 3, time.Hour); !ok {
+		t.Error("failed to create empty item")
+	} else if !writeNFull(c, e, 3, []byte{1, 2, 3}) {
 		t.Error("failed to create non-empty item after empty item")
+	}
+
+	if e, ok, _ := c.get("", ""); !ok {
+		t.Error("failed to get empty item")
+	} else if _, ok := readNToEnd(c, e, 0, 0); !ok {
+		t.Error("failed to read empty item")
+	}
+
+	if e, ok, _ := c.get("s1", "foo"); !ok {
+		t.Error("failed to get non-empty item")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+		t.Error("failed to read non-empty item")
 	}
 
 	c.del("", "")
@@ -837,22 +998,44 @@ func TestEmptyItem(t *testing.T) {
 	if _, ok, _ := c.get("", ""); ok {
 		t.Error("failed to delete empty item")
 	}
-	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{3, 4, 5}) {
-		t.Error("failed to keep non-empty item")
+
+	if e, ok, _ := c.get("s1", "foo"); !ok {
+		t.Error("failed to get non-empty item")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+		t.Error("failed to read non-empty item after deleting empty")
 	}
 }
 
 func TestOverwritingLastItem(t *testing.T) {
 	c := newCache(testOptions)
-	c.set("s1", "foo", []byte{1, 2, 3}, time.Hour)
-	c.set("s1", "bar", []byte{2, 3, 1}, time.Hour)
-	c.set("s1", "bar", []byte{3, 1, 2}, time.Hour)
 
-	if b, ok, _ := c.get("s1", "foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
-		t.Error("failed to find colliding key")
+	if e, ok, _, _ := c.set("s1", "foo", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{1, 2, 3}) {
+		t.Error("failed to write entry data")
 	}
 
-	if b, ok, _ := c.get("s1", "bar"); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
-		t.Error("failed to find colliding key")
+	if e, ok, _, _ := c.set("s1", "bar", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{2, 3, 1}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _, _ := c.set("s1", "bar", 3, time.Hour); !ok {
+		t.Error("failed to set entry")
+	} else if !writeNFull(c, e, 3, []byte{3, 1, 2}) {
+		t.Error("failed to write entry data")
+	}
+
+	if e, ok, _ := c.get("s1", "foo"); !ok {
+		t.Error("failed to get item")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+		t.Error("failed to read non-empty item after deleting empty")
+	}
+
+	if e, ok, _ := c.get("s1", "bar"); !ok {
+		t.Error("failed to get item")
+	} else if b, ok := readNToEnd(c, e, 3, 3); !ok || !bytes.Equal(b, []byte{3, 1, 2}) {
+		t.Error("failed to read item after deleting empty")
 	}
 }

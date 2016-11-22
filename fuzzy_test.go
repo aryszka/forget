@@ -122,11 +122,11 @@ func randomRoundLength() int {
 }
 
 func testGet(c *Cache) {
-	c.Get(randomKeySpace(), randomKey())
+	c.GetBytes(randomKeySpace(), randomKey())
 }
 
 func testSet(c *Cache) {
-	c.Set(randomKeySpace(), randomKey(), randomData(), randomTTL())
+	c.SetBytes(randomKeySpace(), randomKey(), randomData(), randomTTL())
 }
 
 func testDel(c *Cache) {

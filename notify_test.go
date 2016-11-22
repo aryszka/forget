@@ -11,9 +11,9 @@ func TestNotifyHitMiss(t *testing.T) {
 	defer c.Close()
 
 	t.Run("no hit at moderate", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 
-		c.Get("s1", "foo")
+		c.GetBytes("s1", "foo")
 		select {
 		case <-nc:
 			t.Error("unexpected notification")
@@ -22,10 +22,10 @@ func TestNotifyHitMiss(t *testing.T) {
 	})
 
 	t.Run("notify miss at moderate", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3}, 0)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, 0)
 
 		time.Sleep(12 * time.Millisecond)
-		c.Get("s1", "foo")
+		c.GetBytes("s1", "foo")
 		select {
 		case n := <-nc:
 			if n.Type != Miss || n.Keyspace != "s1" || n.Key != "foo" || n.SizeChange.Len != -1 || n.Status == nil {
@@ -40,10 +40,10 @@ func TestNotifyHitMiss(t *testing.T) {
 	defer c.Close()
 
 	t.Run("notify hit at verbose", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 		<-nc
 
-		c.Get("s1", "foo")
+		c.GetBytes("s1", "foo")
 		select {
 		case n := <-nc:
 			if n.Type != Hit || n.Keyspace != "s1" || n.Key != "foo" || n.SizeChange.Len != 0 || n.Status == nil {
@@ -61,7 +61,7 @@ func TestNotifySet(t *testing.T) {
 	defer c.Close()
 
 	t.Run("no set under verbose", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 		select {
 		case <-nc:
 			t.Error("unexpected notification")
@@ -73,8 +73,8 @@ func TestNotifySet(t *testing.T) {
 	defer c.Close()
 
 	t.Run("notifiy if evicted", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
-		c.Set("s1", "bar", []byte{1, 2, 3, 4, 5, 6}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "bar", []byte{1, 2, 3, 4, 5, 6}, time.Hour)
 		select {
 		case n := <-nc:
 			if n.Type != Eviction || n.Keyspace != "s1" || n.Key != "bar" || n.SizeChange.Len != 0 || n.Status == nil {
@@ -89,9 +89,9 @@ func TestNotifySet(t *testing.T) {
 	defer c.Close()
 
 	t.Run("do not notify when no size change and no eviction", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 		<-nc
-		c.Set("s1", "foo", []byte{4, 5, 6}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{4, 5, 6}, time.Hour)
 
 		select {
 		case <-nc:
@@ -101,7 +101,7 @@ func TestNotifySet(t *testing.T) {
 	})
 
 	t.Run("notify at verbose", func(t *testing.T) {
-		c.Set("s1", "bar", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "bar", []byte{1, 2, 3}, time.Hour)
 		select {
 		case n := <-nc:
 			if n.Type != SizeChange || n.Keyspace != "s1" || n.Key != "bar" || n.SizeChange.Len != 1 || n.Status == nil {
@@ -119,7 +119,7 @@ func TestNotifyDelete(t *testing.T) {
 	defer c.Close()
 
 	t.Run("do not notify under verbose", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 		c.Del("s1", "foo")
 		select {
 		case <-nc:
@@ -132,7 +132,7 @@ func TestNotifyDelete(t *testing.T) {
 	defer c.Close()
 
 	t.Run("do not notify when no size change", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 		<-nc
 
 		c.Del("s1", "bar")
@@ -144,7 +144,7 @@ func TestNotifyDelete(t *testing.T) {
 	})
 
 	t.Run("notify on size change", func(t *testing.T) {
-		c.Set("s1", "foo", []byte{1, 2, 3, 4, 5, 6}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3, 4, 5, 6}, time.Hour)
 		<-nc
 
 		c.Del("s1", "foo")
@@ -165,7 +165,7 @@ func TestNoNotificationAfterClose(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		c.Set("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 		close(done)
 	}()
 

@@ -3,6 +3,7 @@ package forget
 import (
 	"hash"
 	"hash/fnv"
+	"io"
 	"time"
 )
 
@@ -36,6 +37,9 @@ type entry struct {
 	size                      Size
 	expiration                time.Time
 	prevNode, nextNode        node
+	filled                    int
+	discarded                 bool
+	wait                      []chan<- struct{}
 }
 
 type keyspace struct {
@@ -164,6 +168,7 @@ func (c *cache) lookup(s *keyspace, hash uint64, key string) (*entry, bool) {
 }
 
 func (c *cache) deleteEntry(space *keyspace, e *entry) Size {
+	e.discarded = true
 	space.entries.remove(e)
 
 	if e.size.Segments > 0 {
@@ -205,8 +210,8 @@ func (c *cache) deleteEntry(space *keyspace, e *entry) Size {
 	return sizeChange
 }
 
-func (c *cache) requiredSegments(key string, data []byte) int {
-	l := len(key) + len(data)
+func (c *cache) requiredSegments(key string, size int) int {
+	l := len(key) + size
 	n := l / c.segmentSize
 
 	if l%c.segmentSize == 0 {
@@ -271,7 +276,55 @@ func (c *cache) allocate(kspace string, requiredSegments int) (node, node, map[s
 	return first, last, evicted, sizeChange
 }
 
-func (c *cache) get(kspace, key string) ([]byte, bool, Size) {
+func (c *cache) read(e *entry, offset int, p []byte) (int, error) {
+	if e.discarded {
+		return 0, ErrItemDiscarded
+	}
+
+	if e.filled < e.size.Effective && offset >= e.filled {
+		return 0, nil
+	}
+
+	if offset >= e.size.Effective {
+		return 0, io.EOF
+	}
+
+	maxCount := e.size.Effective - offset
+	if len(p) > maxCount {
+		p = p[:maxCount]
+	}
+
+	c.readWrite(e, p, offset, dataRead)
+	return len(p), nil
+}
+
+func (c *cache) write(e *entry, offset int, p []byte) (int, error) {
+	if e.discarded {
+		return 0, ErrItemDiscarded
+	}
+
+	if offset >= e.size.Effective {
+		return 0, ErrWriteLimit
+	}
+
+	var err error
+	maxCount := e.size.Effective - offset
+	if len(p) > maxCount {
+		err = ErrWriteLimit
+		p = p[:maxCount]
+	}
+
+	c.readWrite(e, p, offset, dataWrite)
+	e.filled += len(p)
+
+	for _, w := range e.wait {
+		close(w)
+	}
+
+	return len(p), err
+}
+
+func (c *cache) get(kspace, key string) (*entry, bool, Size) {
 	var (
 		space      *keyspace
 		exists     bool
@@ -294,10 +347,10 @@ func (c *cache) get(kspace, key string) ([]byte, bool, Size) {
 
 	space.entries.remove(e)
 	space.entries.append(e)
-	return c.readData(e, len(key), e.size.Effective-len(key)), true, Size{}
+	return e, true, Size{}
 }
 
-func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[string]int, Size) {
+func (c *cache) set(kspace, key string, size int, ttl time.Duration) (*entry, bool, map[string]int, Size) {
 	var (
 		hash             uint64
 		space            *keyspace
@@ -315,45 +368,34 @@ func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[str
 		e, exists = c.lookup(space, hash, key)
 	}
 
-	requiredSegments = c.requiredSegments(key, data)
+	requiredSegments = c.requiredSegments(key, size)
 	if requiredSegments > c.maxSegments {
 		if exists {
 			sizeChange = c.deleteEntry(space, e)
 		}
 
-		return nil, sizeChange
+		return nil, false, nil, sizeChange
 	}
 
 	if exists {
-		space.entries.remove(e)
-		sizeChange = sizeChange.sub(e.size)
-		space.size = space.size.sub(e.size)
-		c.size = c.size.sub(e.size)
-		if e.size.Segments > 0 {
-			if e.lastSegment.next() != c.firstFree {
-				c.data.removeRange(e.firstSegment, e.lastSegment)
-				c.data.insertRange(e.firstSegment, e.lastSegment, c.firstFree)
-			}
-
-			c.firstFree = e.firstSegment
-		}
-	} else {
-		e = &entry{hash: hash}
-		if space == nil {
-			space = &keyspace{entries: new(list), lookup: make(map[uint64][]*entry)}
-			c.spaces[kspace] = space
-		}
-
-		space.lookup[hash] = append(space.lookup[hash], e)
+		sizeChange = c.deleteEntry(space, e)
 	}
 
+	space = c.spaces[kspace]
+	if space == nil {
+		space = &keyspace{entries: new(list), lookup: make(map[uint64][]*entry)}
+		c.spaces[kspace] = space
+	}
+
+	e = &entry{hash: hash}
+	space.lookup[hash] = append(space.lookup[hash], e)
 	e.firstSegment, e.lastSegment, evicted, scAlloc = c.allocate(kspace, requiredSegments)
 	sizeChange = sizeChange.add(scAlloc)
 
 	e.size = Size{
 		Len:       1,
 		Segments:  requiredSegments,
-		Effective: len(key) + len(data),
+		Effective: len(key) + size,
 	}
 	sizeChange = sizeChange.add(e.size)
 	space.size = space.size.add(e.size)
@@ -361,10 +403,10 @@ func (c *cache) set(kspace, key string, data []byte, ttl time.Duration) (map[str
 
 	e.expiration = time.Now().Add(ttl)
 	c.writeData(e, 0, []byte(key))
-	c.writeData(e, len(key), data)
+	e.filled = len(key)
 	space.entries.append(e)
 
-	return evicted, sizeChange
+	return e, true, evicted, sizeChange
 }
 
 func (c *cache) del(kspace, key string) Size {

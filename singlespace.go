@@ -1,6 +1,9 @@
 package forget
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 // SingleSpace is equivalent to Cache but it doesn't use keyspaces.
 type SingleSpace struct {
@@ -14,13 +17,23 @@ func NewSingleSpace(o Options) *SingleSpace {
 }
 
 // Get is like Cache.Get without keyspaces.
-func (s *SingleSpace) Get(key string) ([]byte, bool) {
+func (s *SingleSpace) Get(key string) (io.Reader, bool) {
 	return s.cache.Get("", key)
 }
 
+// GetBytes is like Cache.GetBytes without keyspaces.
+func (s *SingleSpace) GetBytes(key string) ([]byte, bool) {
+	return s.cache.GetBytes("", key)
+}
+
 // Set is like Cache.Set without keyspaces.
-func (s *SingleSpace) Set(key string, data []byte, ttl time.Duration) {
-	s.cache.Set("", key, data, ttl)
+func (s *SingleSpace) Set(key string, size int, ttl time.Duration) io.Writer {
+	return s.cache.Set("", key, size, ttl)
+}
+
+// SetBytes is like Cache.SetBytes without keyspaces.
+func (s *SingleSpace) SetBytes(key string, data []byte, ttl time.Duration) {
+	s.cache.SetBytes("", key, data, ttl)
 }
 
 // Del is like Cache.Del without keyspaces.
