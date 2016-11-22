@@ -4,7 +4,7 @@
 
 # Forget
 
-Forget is a library providing in-memory caching. It can be used as a safe, in-process cache for storing binary
+Forget is a Go library providing in-memory caching. It can be used as a safe, in-process cache for storing binary
 data with keys and keyspaces.
 
 It:
