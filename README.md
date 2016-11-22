@@ -33,11 +33,11 @@ More details about the usage and the package description can be found here:
 c := forget.New(forget.Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
 defer c.Close()
 
-c.Set("pages", "/home", []byte("Hello, world!"), time.Minute)
-c.Set("pages", "/article-one", []byte("This is cached."), time.Minute)
-c.Set("ajax-data", "/api/site-index", []byte(`{"data": 42}`), 12*time.Minute)
+c.SetBytes("pages", "/home", []byte("Hello, world!"), time.Minute)
+c.SetBytes("pages", "/article-one", []byte("This is cached."), time.Minute)
+c.SetBytes("ajax-data", "/api/site-index", []byte(`{"data": 42}`), 12*time.Minute)
 
-if d, ok := c.Get("pages", "/article-one"); ok {
+if d, ok := c.GetBytes("pages", "/article-one"); ok {
 	fmt.Println(string(d))
 } else {
 	fmt.Println("article not found in cache")
