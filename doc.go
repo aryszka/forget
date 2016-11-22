@@ -46,11 +46,12 @@ or not.) On the other hand, Forget cheats to some extent with the maximum size, 
 not counted. This includes: the size of the keyspace names, additional ~24 bytes for each segment, additional
 ~120 bytes of lookup metadata for each stored item.
 
-In case of both Get() and Set(), the key and payload is copied from and to the cache. This means that it is safe
-to modify or reuse the byte slice buffers used during these operations, it won't change the stored data.
+IO
 
-Forget's eviction mechanism is 'passive': it doesn't run background workers, cache eviction happens at the time
-of calling Set().
+Forget allows concurrent read and write of a cached item (in fact, only a single write). If a new item is set,
+reading from it can start immediately, even if the data to be cached was not yet fully written. When the read
+reaches a point that the write hasn't reached yet, the read blocks and only continues once there is more data
+available.
 
 Status and Notifications
 

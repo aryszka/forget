@@ -20,10 +20,10 @@ bench: build
 	go test -cpuprofile cpu.out -memprofile mem.out -bench .
 
 cpu:
-	go tool pprof -top cpu.out || echo Run 'make bench' generate profile.
+	go tool pprof -top cpu.out # Run 'make bench' to generate profile.
 
 mem:
-	go tool pprof -top mem.out || echo Run 'make bench' generate profile.
+	go tool pprof -top mem.out # Run 'make bench' to generate profile.
 
 gencover: build
 	go test -test.short -coverprofile cover.out

@@ -13,6 +13,7 @@ It:
 - preallocates the maximum required memory in advance, no further, large allocations required;
 - uses keys and keyspaces to identify cached items, so that a key can appear in multiple keyspaces with
   different cached data; 
+- supports concurrent, streaming-style read and write of the cached items;
 - supports TTL based expiration, where every item can have a different TTL;
 - evicts the least recently used item from the cache when there is no more space for new items (LRU);
 - evicts first the items in the keyspace of the new item, fitting this way less frequently accessed but more
