@@ -57,6 +57,7 @@ func TestGet(t *testing.T) {
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := newTestCache(ti.init)
+			defer c.Close()
 
 			v, ok := c.Get(ti.key)
 			if ok != ti.ok {
@@ -119,6 +120,8 @@ func TestSet(t *testing.T) {
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := newTestCache(ti.init)
+			defer c.Close()
+
 			c.Set(ti.key, ti.value)
 			if !checkCache(c, ti.check) {
 				t.Error("failed to set the key")
@@ -166,10 +169,42 @@ func TestDel(t *testing.T) {
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := newTestCache(ti.init)
+			defer c.Close()
+
 			c.Del(ti.key)
 			if !checkCache(c, ti.check) {
 				t.Error("failed to delete the key")
 			}
 		})
 	}
+}
+
+func TestClose(t *testing.T) {
+	c := New()
+	c.Set("foo", 42)
+
+	c.Close()
+
+	if _, ok := c.Get("foo"); ok {
+		t.Error("failed to close cache")
+		return
+	}
+
+	// crash test:
+	func() {
+		defer func() {
+			if err := recover(); err != nil {
+				t.Error(err)
+			}
+		}()
+
+		c.Set("bar", 3.14)
+		if _, ok := c.Get("bar"); ok {
+			t.Error("failed to close cache")
+			return
+		}
+
+		c.Del("foo")
+		c.Close()
+	}()
 }

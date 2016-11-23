@@ -59,12 +59,42 @@ func executeSet(c *Cache) {
 	c.Set(randomKey(), randomData())
 }
 
-func BenchmarkGet_0_1(b *testing.B)       { benchmark(b, 0, 1, executeGet) }
-func BenchmarkGet_100_1(b *testing.B)     { benchmark(b, 100, 1, executeGet) }
-func BenchmarkGet_10000_1(b *testing.B)   { benchmark(b, 10000, 1, executeGet) }
-func BenchmarkGet_1000000_1(b *testing.B) { benchmark(b, 1000000, 1, executeGet) }
+func BenchmarkGet_0_100000(b *testing.B)      { benchmark(b, 0, 100000, executeGet) }
+func BenchmarkGet_10_100000(b *testing.B)     { benchmark(b, 10, 100000, executeGet) }
+func BenchmarkGet_1000_100000(b *testing.B)   { benchmark(b, 1000, 100000, executeGet) }
+func BenchmarkGet_100000_100000(b *testing.B) { benchmark(b, 100000, 100000, executeGet) }
 
-func BenchmarkSet_0_1(b *testing.B)       { benchmark(b, 0, 1, executeSet) }
-func BenchmarkSet_100_1(b *testing.B)     { benchmark(b, 100, 1, executeSet) }
-func BenchmarkSet_10000_1(b *testing.B)   { benchmark(b, 10000, 1, executeSet) }
-func BenchmarkSet_1000000_1(b *testing.B) { benchmark(b, 1000000, 1, executeSet) }
+func BenchmarkSet_0_100000(b *testing.B)      { benchmark(b, 0, 100000, executeSet) }
+func BenchmarkSet_10_100000(b *testing.B)     { benchmark(b, 10, 100000, executeSet) }
+func BenchmarkSet_1000_100000(b *testing.B)   { benchmark(b, 1000, 100000, executeSet) }
+func BenchmarkSet_100000_100000(b *testing.B) { benchmark(b, 100000, 100000, executeSet) }
+
+func BenchmarkGet_0_1000(b *testing.B)      { benchmark(b, 0, 1000, executeGet) }
+func BenchmarkGet_10_1000(b *testing.B)     { benchmark(b, 10, 1000, executeGet) }
+func BenchmarkGet_1000_1000(b *testing.B)   { benchmark(b, 1000, 1000, executeGet) }
+func BenchmarkGet_100000_1000(b *testing.B) { benchmark(b, 100000, 1000, executeGet) }
+
+func BenchmarkSet_0_1000(b *testing.B)      { benchmark(b, 0, 1000, executeSet) }
+func BenchmarkSet_10_1000(b *testing.B)     { benchmark(b, 10, 1000, executeSet) }
+func BenchmarkSet_1000_1000(b *testing.B)   { benchmark(b, 1000, 1000, executeSet) }
+func BenchmarkSet_100000_1000(b *testing.B) { benchmark(b, 100000, 1000, executeSet) }
+
+func BenchmarkGet_0_10(b *testing.B)      { benchmark(b, 0, 10, executeGet) }
+func BenchmarkGet_10_10(b *testing.B)     { benchmark(b, 10, 10, executeGet) }
+func BenchmarkGet_1000_10(b *testing.B)   { benchmark(b, 1000, 10, executeGet) }
+func BenchmarkGet_100000_10(b *testing.B) { benchmark(b, 100000, 10, executeGet) }
+
+func BenchmarkSet_0_10(b *testing.B)      { benchmark(b, 0, 10, executeSet) }
+func BenchmarkSet_10_10(b *testing.B)     { benchmark(b, 10, 10, executeSet) }
+func BenchmarkSet_1000_10(b *testing.B)   { benchmark(b, 1000, 10, executeSet) }
+func BenchmarkSet_100000_10(b *testing.B) { benchmark(b, 100000, 10, executeSet) }
+
+func BenchmarkGet_0_1(b *testing.B)      { benchmark(b, 0, 1, executeGet) }
+func BenchmarkGet_10_1(b *testing.B)     { benchmark(b, 10, 1, executeGet) }
+func BenchmarkGet_1000_1(b *testing.B)   { benchmark(b, 1000, 1, executeGet) }
+func BenchmarkGet_100000_1(b *testing.B) { benchmark(b, 100000, 1, executeGet) }
+
+func BenchmarkSet_0_1(b *testing.B)      { benchmark(b, 0, 1, executeSet) }
+func BenchmarkSet_10_1(b *testing.B)     { benchmark(b, 10, 1, executeSet) }
+func BenchmarkSet_1000_1(b *testing.B)   { benchmark(b, 1000, 1, executeSet) }
+func BenchmarkSet_100000_1(b *testing.B) { benchmark(b, 100000, 1, executeSet) }
