@@ -1,30 +1,40 @@
 package forget
 
 type cache struct {
-	data map[string]interface{}
+	data map[string]*entry
 }
 
 func newCache() *cache {
-	return &cache{data: make(map[string]interface{})}
+	return &cache{data: make(map[string]*entry)}
 }
 
-func (c *cache) get(key string) (interface{}, bool) {
+func (c *cache) get(key string) (*entry, bool) {
 	d, ok := c.data[key]
 	return d, ok
 }
 
-func (c *cache) set(key string, data interface{}) {
+func (c *cache) set(key string) (*entry, bool) {
 	if c.data == nil {
-		return
+		return nil, false
 	}
 
-	c.data[key] = data
+	e := newEntry()
+	c.data[key] = e
+	return e, true
 }
 
 func (c *cache) del(key string) {
+	if e, ok := c.data[key]; ok {
+		e.close()
+	}
+
 	delete(c.data, key)
 }
 
 func (c *cache) close() {
+	for _, e := range c.data {
+		e.close()
+	}
+
 	c.data = nil
 }

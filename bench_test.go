@@ -5,24 +5,29 @@ import (
 	"testing"
 )
 
-func createCache(n int) *Cache {
-	c := New()
-	for i := 0; i < n; i++ {
-		c.Set(randomKey(), randomData())
+const emulateMultiCoreMode = 4
+
+func createCache(n int) []*Cache {
+	c := make([]*Cache, emulateMultiCoreMode)
+	for i := 0; i < len(c); i++ {
+		c[i] = New()
+		for j := 0; j < n; j++ {
+			c[i].SetBytes(randomKey(), randomData())
+		}
 	}
 
 	return c
 }
 
-func runN(execute func(*Cache)) func(*Cache, int) {
-	return func(c *Cache, n int) {
+func runN(execute func(*Cache)) func([]*Cache, int) {
+	return func(c []*Cache, n int) {
 		for i := 0; i < n; i++ {
-			execute(c)
+			execute(c[i%len(c)])
 		}
 	}
 }
 
-func runConcurrent(c *Cache, total, concurrent int, run func(*Cache, int)) {
+func runConcurrent(c []*Cache, total, concurrent int, run func([]*Cache, int)) {
 	n := total / concurrent
 	if total%concurrent != 0 {
 		n++
@@ -47,16 +52,22 @@ func runConcurrent(c *Cache, total, concurrent int, run func(*Cache, int)) {
 
 func benchmark(b *testing.B, init, concurrent int, execute func(*Cache)) {
 	c := createCache(init)
+	defer func() {
+		for _, ci := range c {
+			ci.Close()
+		}
+	}()
+
 	b.ResetTimer()
 	runConcurrent(c, b.N, concurrent, runN(execute))
 }
 
 func executeGet(c *Cache) {
-	c.Get(randomKey())
+	c.GetBytes(randomKey())
 }
 
 func executeSet(c *Cache) {
-	c.Set(randomKey(), randomData())
+	c.SetBytes(randomKey(), randomData())
 }
 
 func BenchmarkGet_0_100000(b *testing.B)      { benchmark(b, 0, 100000, executeGet) }

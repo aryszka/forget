@@ -1,19 +1,25 @@
 package forget
 
-import "testing"
+import (
+	"bytes"
+	"io"
+	"sync"
+	"testing"
+	"time"
+)
 
-func newTestCache(init map[string]interface{}) *Cache {
+func newTestCache(init map[string][]byte) *Cache {
 	c := New()
 	for k, v := range init {
-		c.Set(k, v)
+		c.SetBytes(k, v)
 	}
 
 	return c
 }
 
-func checkCache(c *Cache, check map[string]interface{}) bool {
-	for k, vk := range check {
-		if v, ok := c.Get(k); !ok || v != vk {
+func checkCache(c *Cache, check map[string][]byte) bool {
+	for k, dk := range check {
+		if d, ok := c.GetBytes(k); !ok || !bytes.Equal(d, dk) {
 			return false
 		}
 	}
@@ -23,11 +29,11 @@ func checkCache(c *Cache, check map[string]interface{}) bool {
 
 func TestGet(t *testing.T) {
 	for _, ti := range []struct {
-		msg   string
-		init  map[string]interface{}
-		key   string
-		value interface{}
-		ok    bool
+		msg  string
+		init map[string][]byte
+		key  string
+		data []byte
+		ok   bool
 	}{{
 		"empty",
 		nil,
@@ -36,37 +42,37 @@ func TestGet(t *testing.T) {
 		false,
 	}, {
 		"not found",
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 2,
-			"baz": 3,
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {2, 3, 1},
+			"baz": {3, 1, 2},
 		},
 		"qux",
 		nil,
 		false,
 	}, {
 		"found",
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 2,
-			"baz": 3,
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {2, 3, 1},
+			"baz": {3, 1, 2},
 		},
 		"bar",
-		2,
+		[]byte{2, 3, 1},
 		true,
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := newTestCache(ti.init)
 			defer c.Close()
 
-			v, ok := c.Get(ti.key)
+			d, ok := c.GetBytes(ti.key)
 			if ok != ti.ok {
 				t.Error("invalid result")
 				return
 			}
 
-			if ok && v != ti.value {
-				t.Error("invalid result value")
+			if ok && !bytes.Equal(d, ti.data) {
+				t.Error("invalid result data")
 				return
 			}
 		})
@@ -76,53 +82,53 @@ func TestGet(t *testing.T) {
 func TestSet(t *testing.T) {
 	for _, ti := range []struct {
 		msg   string
-		init  map[string]interface{}
+		init  map[string][]byte
 		key   string
-		value interface{}
-		check map[string]interface{}
+		data  []byte
+		check map[string][]byte
 	}{{
 		"empty",
 		nil,
 		"foo",
-		1,
-		map[string]interface{}{
-			"foo": 1,
+		[]byte{1, 2, 3},
+		map[string][]byte{
+			"foo": {1, 2, 3},
 		},
 	}, {
 		"new",
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 2,
-			"baz": 3,
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {2, 3, 1},
+			"baz": {3, 1, 2},
 		},
 		"qux",
-		4,
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 2,
-			"baz": 3,
-			"qux": 4,
+		[]byte{3, 2, 1},
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {2, 3, 1},
+			"baz": {3, 1, 2},
+			"qux": {3, 2, 1},
 		},
 	}, {
 		"overwrite",
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 2,
-			"baz": 3,
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {2, 3, 1},
+			"baz": {3, 1, 2},
 		},
 		"bar",
-		4,
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 4,
-			"baz": 3,
+		[]byte{3, 2, 1},
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {3, 2, 1},
+			"baz": {3, 1, 2},
 		},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
 			c := newTestCache(ti.init)
 			defer c.Close()
 
-			c.Set(ti.key, ti.value)
+			c.SetBytes(ti.key, ti.data)
 			if !checkCache(c, ti.check) {
 				t.Error("failed to set the key")
 			}
@@ -133,9 +139,9 @@ func TestSet(t *testing.T) {
 func TestDel(t *testing.T) {
 	for _, ti := range []struct {
 		msg   string
-		init  map[string]interface{}
+		init  map[string][]byte
 		key   string
-		check map[string]interface{}
+		check map[string][]byte
 	}{{
 		"empty",
 		nil,
@@ -143,28 +149,28 @@ func TestDel(t *testing.T) {
 		nil,
 	}, {
 		"not found",
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 2,
-			"baz": 3,
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {2, 3, 1},
+			"baz": {3, 1, 2},
 		},
 		"qux",
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 2,
-			"baz": 3,
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {2, 3, 1},
+			"baz": {3, 1, 2},
 		},
 	}, {
 		"found",
-		map[string]interface{}{
-			"foo": 1,
-			"bar": 2,
-			"baz": 3,
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"bar": {2, 3, 1},
+			"baz": {3, 1, 2},
 		},
 		"bar",
-		map[string]interface{}{
-			"foo": 1,
-			"baz": 3,
+		map[string][]byte{
+			"foo": {1, 2, 3},
+			"baz": {3, 1, 2},
 		},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
@@ -181,11 +187,13 @@ func TestDel(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	c := New()
-	c.Set("foo", 42)
+	defer c.Close()
+
+	c.SetBytes("foo", []byte{1, 2, 3})
 
 	c.Close()
 
-	if _, ok := c.Get("foo"); ok {
+	if _, ok := c.GetBytes("foo"); ok {
 		t.Error("failed to close cache")
 		return
 	}
@@ -198,8 +206,8 @@ func TestClose(t *testing.T) {
 			}
 		}()
 
-		c.Set("bar", 3.14)
-		if _, ok := c.Get("bar"); ok {
+		c.SetBytes("bar", []byte{2, 3, 1})
+		if _, ok := c.GetBytes("bar"); ok {
 			t.Error("failed to close cache")
 			return
 		}
@@ -207,4 +215,142 @@ func TestClose(t *testing.T) {
 		c.Del("foo")
 		c.Close()
 	}()
+}
+
+func TestWaitForData(t *testing.T) {
+	c := New()
+	defer c.Close()
+
+	w, ok := c.Set("foo")
+	if !ok {
+		t.Error("failed to set item")
+		return
+	}
+
+	var wg sync.WaitGroup
+	read := func() {
+		if r, ok := c.Get("foo"); ok {
+			b := bytes.NewBuffer(nil)
+			if _, err := io.Copy(b, r); err != nil || !bytes.Equal(b.Bytes(), []byte{1, 2, 3}) {
+				t.Error("failed to read data", err, b.Bytes())
+			}
+		} else {
+			t.Error("item not found")
+		}
+
+		wg.Done()
+	}
+
+	wg.Add(2)
+	go read()
+	go read()
+
+	time.Sleep(12 * time.Millisecond)
+	if _, err := w.Write([]byte{1, 2, 3}); err == nil {
+		if err := w.Close(); err != nil {
+			t.Error("close failed", err)
+		}
+	} else {
+		t.Error("write failed", err)
+	}
+
+	wg.Wait()
+}
+
+func TestReadFromDeletedEntry(t *testing.T) {
+	c := New()
+	defer c.Close()
+
+	if !c.SetBytes("foo", []byte{1, 2, 3}) {
+		t.Error("failed to set item")
+		return
+	}
+
+	r, ok := c.Get("foo")
+	if !ok {
+		t.Error("failed to get reader")
+		return
+	}
+
+	c.Del("foo")
+
+	p := make([]byte, 3)
+	if _, err := r.Read(p); err != ErrItemDiscarded {
+		t.Error("failed to get discarded error", err)
+	}
+}
+
+func TestWriteToDeletedEntry(t *testing.T) {
+	c := New()
+	defer c.Close()
+
+	w, ok := c.Set("foo")
+	if !ok {
+		t.Error("failed to set item")
+		return
+	}
+
+	if _, err := w.Write([]byte{1, 2, 3}); err != nil {
+		t.Error("failed to write to item")
+		return
+	}
+
+	c.Del("foo")
+
+	if _, err := w.Write([]byte{4, 5, 6}); err != ErrItemDiscarded {
+		t.Error("failed to get discarded error", err)
+		return
+	}
+}
+
+func TestWriteToCompleteEntry(t *testing.T) {
+	c := New()
+	defer c.Close()
+
+	w, ok := c.Set("foo")
+	if !ok {
+		t.Error("failed to set item")
+		return
+	}
+
+	if _, err := w.Write([]byte{1, 2, 3}); err != nil {
+		t.Error("failed to write to item")
+		return
+	}
+
+	if err := w.Close(); err != nil {
+		t.Error("failed to close writer")
+		return
+	}
+
+	if _, err := w.Write([]byte{4, 5, 6}); err != ErrItemWriteComplete {
+		t.Error("failed to get discarded error", err)
+		return
+	}
+}
+
+func TestCloseWriteTwice(t *testing.T) {
+	c := New()
+	defer c.Close()
+
+	w, ok := c.Set("foo")
+	if !ok {
+		t.Error("failed to set item")
+		return
+	}
+
+	if _, err := w.Write([]byte{1, 2, 3}); err != nil {
+		t.Error("failed to write to item")
+		return
+	}
+
+	if err := w.Close(); err != nil {
+		t.Error("failed to close writer")
+		return
+	}
+
+	if err := w.Close(); err != ErrItemWriteComplete {
+		t.Error("failed to get discarded error", err)
+		return
+	}
 }
