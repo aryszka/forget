@@ -1,71 +1,175 @@
 package forget
 
-import (
-	"sync"
-	"testing"
-)
+import "testing"
 
-func createCache(n int) Cache {
-	c := make(Cache)
-	for i := 0; i < n; i++ {
-		c[randomKey()] = randomData()
+func newTestCache(init map[string]interface{}) *Cache {
+	c := New()
+	for k, v := range init {
+		c.Set(k, v)
 	}
 
 	return c
 }
 
-func runN(execute func(Cache)) func(Cache, int) {
-	return func(c Cache, n int) {
-		for i := 0; i < n; i++ {
-			execute(c)
+func checkCache(c *Cache, check map[string]interface{}) bool {
+	for k, vk := range check {
+		if v, ok := c.Get(k); !ok || v != vk {
+			return false
 		}
 	}
+
+	return true
 }
 
-func runConcurrent(c Cache, total, concurrent int, run func(Cache, int)) {
-	n := total / concurrent
-	if total%concurrent != 0 {
-		n++
+func TestGet(t *testing.T) {
+	for _, ti := range []struct {
+		msg   string
+		init  map[string]interface{}
+		key   string
+		value interface{}
+		ok    bool
+	}{{
+		"empty",
+		nil,
+		"foo",
+		nil,
+		false,
+	}, {
+		"not found",
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 2,
+			"baz": 3,
+		},
+		"qux",
+		nil,
+		false,
+	}, {
+		"found",
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 2,
+			"baz": 3,
+		},
+		"bar",
+		2,
+		true,
+	}} {
+		t.Run(ti.msg, func(t *testing.T) {
+			c := newTestCache(ti.init)
+
+			v, ok := c.Get(ti.key)
+			if ok != ti.ok {
+				t.Error("invalid result")
+				return
+			}
+
+			if ok && v != ti.value {
+				t.Error("invalid result value")
+				return
+			}
+		})
 	}
+}
 
-	var wg sync.WaitGroup
-	for total > 0 {
-		if total-n < 0 {
-			n = total
-		}
-
-		wg.Add(1)
-		go func(n int) {
-			run(c, n)
-			wg.Done()
-		}(n)
-		total -= n
+func TestSet(t *testing.T) {
+	for _, ti := range []struct {
+		msg   string
+		init  map[string]interface{}
+		key   string
+		value interface{}
+		check map[string]interface{}
+	}{{
+		"empty",
+		nil,
+		"foo",
+		1,
+		map[string]interface{}{
+			"foo": 1,
+		},
+	}, {
+		"new",
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 2,
+			"baz": 3,
+		},
+		"qux",
+		4,
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 2,
+			"baz": 3,
+			"qux": 4,
+		},
+	}, {
+		"overwrite",
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 2,
+			"baz": 3,
+		},
+		"bar",
+		4,
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 4,
+			"baz": 3,
+		},
+	}} {
+		t.Run(ti.msg, func(t *testing.T) {
+			c := newTestCache(ti.init)
+			c.Set(ti.key, ti.value)
+			if !checkCache(c, ti.check) {
+				t.Error("failed to set the key")
+			}
+		})
 	}
-
-	wg.Wait()
 }
 
-func benchmark(b *testing.B, init, concurrent int, execute func(Cache)) {
-	c := createCache(init)
-	b.ResetTimer()
-	runConcurrent(c, b.N, concurrent, runN(execute))
-}
-
-func executeGet(c Cache) {
-	if _, ok := c[randomKey()]; ok {
+func TestDel(t *testing.T) {
+	for _, ti := range []struct {
+		msg   string
+		init  map[string]interface{}
+		key   string
+		check map[string]interface{}
+	}{{
+		"empty",
+		nil,
+		"foo",
+		nil,
+	}, {
+		"not found",
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 2,
+			"baz": 3,
+		},
+		"qux",
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 2,
+			"baz": 3,
+		},
+	}, {
+		"found",
+		map[string]interface{}{
+			"foo": 1,
+			"bar": 2,
+			"baz": 3,
+		},
+		"bar",
+		map[string]interface{}{
+			"foo": 1,
+			"baz": 3,
+		},
+	}} {
+		t.Run(ti.msg, func(t *testing.T) {
+			c := newTestCache(ti.init)
+			c.Del(ti.key)
+			if !checkCache(c, ti.check) {
+				t.Error("failed to delete the key")
+			}
+		})
 	}
 }
-
-func executeSet(c Cache) {
-	c[randomKey()] = randomData()
-}
-
-func BenchmarkGet_0_1(b *testing.B)       { benchmark(b, 0, 1, executeGet) }
-func BenchmarkGet_100_1(b *testing.B)     { benchmark(b, 100, 1, executeGet) }
-func BenchmarkGet_10000_1(b *testing.B)   { benchmark(b, 10000, 1, executeGet) }
-func BenchmarkGet_1000000_1(b *testing.B) { benchmark(b, 1000000, 1, executeGet) }
-
-func BenchmarkSet_0_1(b *testing.B)       { benchmark(b, 0, 1, executeSet) }
-func BenchmarkSet_100_1(b *testing.B)     { benchmark(b, 100, 1, executeSet) }
-func BenchmarkSet_10000_1(b *testing.B)   { benchmark(b, 10000, 1, executeSet) }
-func BenchmarkSet_1000000_1(b *testing.B) { benchmark(b, 1000000, 1, executeSet) }
