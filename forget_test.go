@@ -8,10 +8,16 @@ import (
 	"time"
 )
 
-func newTestCache(init map[string][]byte) *Cache {
-	c := New()
+func newTestCache() *Cache {
+	return New(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+}
+
+func initTestCache(init map[string][]byte) *Cache {
+	c := newTestCache()
 	for k, v := range init {
-		c.SetBytes(k, v)
+		if !c.SetBytes(k, v) {
+			panic("failed to initialize test cache")
+		}
 	}
 
 	return c
@@ -62,7 +68,7 @@ func TestGet(t *testing.T) {
 		true,
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			c := newTestCache(ti.init)
+			c := initTestCache(ti.init)
 			defer c.Close()
 
 			d, ok := c.GetBytes(ti.key)
@@ -72,7 +78,7 @@ func TestGet(t *testing.T) {
 			}
 
 			if ok && !bytes.Equal(d, ti.data) {
-				t.Error("invalid result data")
+				t.Error("invalid result data", d, ti.data)
 				return
 			}
 		})
@@ -125,7 +131,7 @@ func TestSet(t *testing.T) {
 		},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			c := newTestCache(ti.init)
+			c := initTestCache(ti.init)
 			defer c.Close()
 
 			c.SetBytes(ti.key, ti.data)
@@ -174,7 +180,7 @@ func TestDel(t *testing.T) {
 		},
 	}} {
 		t.Run(ti.msg, func(t *testing.T) {
-			c := newTestCache(ti.init)
+			c := initTestCache(ti.init)
 			defer c.Close()
 
 			c.Del(ti.key)
@@ -186,7 +192,7 @@ func TestDel(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	c := New()
+	c := newTestCache()
 	defer c.Close()
 
 	c.SetBytes("foo", []byte{1, 2, 3})
@@ -218,7 +224,7 @@ func TestClose(t *testing.T) {
 }
 
 func TestWaitForData(t *testing.T) {
-	c := New()
+	c := newTestCache()
 	defer c.Close()
 
 	w, ok := c.Set("foo")
@@ -258,7 +264,7 @@ func TestWaitForData(t *testing.T) {
 }
 
 func TestReadFromDeletedEntry(t *testing.T) {
-	c := New()
+	c := newTestCache()
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}) {
@@ -281,7 +287,7 @@ func TestReadFromDeletedEntry(t *testing.T) {
 }
 
 func TestWriteToDeletedEntry(t *testing.T) {
-	c := New()
+	c := newTestCache()
 	defer c.Close()
 
 	w, ok := c.Set("foo")
@@ -304,7 +310,7 @@ func TestWriteToDeletedEntry(t *testing.T) {
 }
 
 func TestWriteToCompleteEntry(t *testing.T) {
-	c := New()
+	c := newTestCache()
 	defer c.Close()
 
 	w, ok := c.Set("foo")
@@ -323,14 +329,14 @@ func TestWriteToCompleteEntry(t *testing.T) {
 		return
 	}
 
-	if _, err := w.Write([]byte{4, 5, 6}); err != ErrItemWriteComplete {
+	if _, err := w.Write([]byte{4, 5, 6}); err != ErrWriterClosed {
 		t.Error("failed to get discarded error", err)
 		return
 	}
 }
 
 func TestCloseWriteTwice(t *testing.T) {
-	c := New()
+	c := newTestCache()
 	defer c.Close()
 
 	w, ok := c.Set("foo")
@@ -349,7 +355,7 @@ func TestCloseWriteTwice(t *testing.T) {
 		return
 	}
 
-	if err := w.Close(); err != ErrItemWriteComplete {
+	if err := w.Close(); err != ErrWriterClosed {
 		t.Error("failed to get discarded error", err)
 		return
 	}

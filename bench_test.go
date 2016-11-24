@@ -10,7 +10,7 @@ const emulateMultiCoreMode = 4
 func createCache(n int) []*Cache {
 	c := make([]*Cache, emulateMultiCoreMode)
 	for i := 0; i < len(c); i++ {
-		c[i] = New()
+		c[i] = newTestCache()
 		for j := 0; j < n; j++ {
 			c[i].SetBytes(randomKey(), randomData())
 		}

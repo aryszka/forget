@@ -1,6 +1,7 @@
 package forget
 
 import (
+	"errors"
 	"sync"
 )
 
@@ -10,48 +11,98 @@ type cio struct {
 	offset int
 }
 
-func newIO(mx *sync.Mutex, e *entry) *cio {
-	return &cio{mx: mx, entry: e}
+type reader struct {
+	*cio
 }
 
-func (cio *cio) readOnce(p []byte) (int, error) {
-	cio.mx.Lock()
-	defer cio.mx.Unlock()
-	return cio.entry.read(cio.offset, p)
+type writer struct {
+	*cio
+	cache *cache
 }
 
-func (cio *cio) Read(p []byte) (int, error) {
-	n, err := cio.readOnce(p)
-	for n == 0 && err == nil {
-		cio.entry.waitData()
-		n, err = cio.readOnce(p)
+var (
+	ErrWriteLimit   = errors.New("write limit")
+	ErrWriterClosed = errors.New("writer closed")
+)
+
+func newReader(mx *sync.Mutex, e *entry) *reader {
+	return &reader{cio: &cio{mx: mx, entry: e}}
+}
+
+func newWriter(mx *sync.Mutex, c *cache, e *entry) *writer {
+	return &writer{
+		cio:   &cio{mx: mx, entry: e},
+		cache: c,
+	}
+}
+
+func (r *reader) read(p []byte) (int, error) {
+	r.mx.Lock()
+	defer r.mx.Unlock()
+	return r.entry.read(r.offset, p)
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
 	}
 
-	cio.offset += n
+	n, err := r.read(p)
+	for n == 0 && err == nil {
+		r.entry.waitData()
+		n, err = r.read(p)
+	}
+
+	r.offset += n
 	return n, err
 }
 
-func (cio *cio) Write(p []byte) (int, error) {
-	n, err := func() (int, error) {
-		cio.mx.Lock()
-		defer cio.mx.Unlock()
-
-		n, err := cio.entry.write(p)
-		cio.offset += n
-		return n, err
-	}()
-
-	cio.entry.broadcastData()
-	return n, err
+func (r *reader) Close() error {
+	r.entry = nil
+	return nil
 }
 
-func (cio *cio) Close() error {
+func (w *writer) Write(p []byte) (int, error) {
+	if w.entry == nil {
+		return 0, ErrWriterClosed
+	}
+
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	w.mx.Lock()
+	defer w.mx.Unlock()
+
+	var count int
+	for {
+		n, err := w.entry.write(p)
+		w.offset += n
+		p = p[n:]
+		count += n
+		if len(p) == 0 || err != nil {
+			return count, err
+		}
+
+		if ok := w.cache.allocateFor(w.entry); !ok {
+			return count, ErrWriteLimit
+		}
+	}
+}
+
+func (w *writer) Close() error {
+	if w.entry == nil {
+		return ErrWriterClosed
+	}
+
 	err := func() error {
-		cio.mx.Lock()
-		defer cio.mx.Unlock()
-		return cio.entry.closeWrite()
+		w.mx.Lock()
+		defer w.mx.Unlock()
+		return w.entry.closeWrite()
 	}()
 
-	cio.entry.broadcastData()
+	w.entry.broadcastData()
+	w.entry = nil
+	w.cache = nil
 	return err
 }

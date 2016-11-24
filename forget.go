@@ -6,6 +6,16 @@ import (
 	"sync"
 )
 
+// Options objects are used to pass in parameters to new Cache instances.
+type Options struct {
+
+	// MaxSize defines the maximum size of the memory.
+	MaxSize int
+
+	// SegmentSize defines the segment size in the memory.
+	SegmentSize int
+}
+
 // Cache provides an in-memory cache for arbitrary binary data
 // identified by keyspace and key. All methods of Cache are thread safe.
 type Cache struct {
@@ -14,10 +24,10 @@ type Cache struct {
 }
 
 // New initializes a cache.
-func New() *Cache {
+func New(o Options) *Cache {
 	return &Cache{
 		mx:    &sync.Mutex{},
-		cache: newCache(),
+		cache: newCache(o.MaxSize/o.SegmentSize, o.SegmentSize),
 	}
 }
 
@@ -25,13 +35,13 @@ func New() *Cache {
 // found. Reading can start before writing to the item was finished. The reader blocks if the read reaches the point that
 // the writer didn't pass yet. If the write finished, and the reader reaches the end of the item, EOF is
 // returned. The reader returns ErrCacheClosed if the cache was closed and ErrItemDiscarded if
-// the original item with the given keyspace and key is not available anymore.
-func (c *Cache) Get(key string) (io.Reader, bool) {
+// the original item with the given keyspace and key is not available anymore. The reader must be closed.
+func (c *Cache) Get(key string) (io.ReadCloser, bool) {
 	c.mx.Lock()
 	defer c.mx.Unlock()
 
 	if e, ok := c.cache.get(key); ok {
-		return newIO(c.mx, e), true
+		return newReader(c.mx, e), true
 	}
 
 	return nil, false
@@ -39,7 +49,7 @@ func (c *Cache) Get(key string) (io.Reader, bool) {
 
 // Set creates a cache item and returns a writer that can be used to store the assocated data.
 // The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
-// reaches the maximum item size of the cache.
+// reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
 func (c *Cache) Set(key string) (io.WriteCloser, bool) {
 	c.mx.Lock()
 	defer c.mx.Unlock()
@@ -49,7 +59,23 @@ func (c *Cache) Set(key string) (io.WriteCloser, bool) {
 		return nil, false
 	}
 
-	return newIO(c.mx, e), true
+	return newWriter(c.mx, c.cache, e), true
+}
+
+// checks if a key is in the cache
+func (c *Cache) GetKey(key string) bool {
+	_, exists := c.Get(key)
+	return exists
+}
+
+// sets only a key without data
+func (c *Cache) SetKey(key string) bool {
+	if w, ok := c.Set(key); ok {
+		err := w.Close()
+		return err == nil
+	}
+
+	return false
 }
 
 // GetBytes retrieves an item from the cache with a key. If found, the second
@@ -59,6 +85,8 @@ func (c *Cache) GetBytes(key string) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
+
+	defer r.Close()
 
 	b := bytes.NewBuffer(nil)
 	_, err := io.Copy(b, r)
@@ -72,10 +100,16 @@ func (c *Cache) SetBytes(key string, data []byte) bool {
 		return false
 	}
 
+	defer w.Close()
+
+	// TODO: which errors can happen here
 	b := bytes.NewBuffer(data)
-	io.Copy(w, b) // TODO: which errors can happen here
-	w.Close()     // TODO: which errors can happen here
-	return true
+	if _, err := io.Copy(w, b); err == nil {
+		return true
+	}
+
+	c.Del(key)
+	return false
 }
 
 // Del deletes an item from the cache with a key.
@@ -92,6 +126,11 @@ func (c *Cache) Close() {
 	c.cache.close()
 }
 
-// binary data
+// memory
+// make sure reader is closed everywhere
+// overload handling: reader priority, writer priority, writer block
+// keyspaces
+// look for memory leak
+// max procs
 
 // once possible, make an http comparison
