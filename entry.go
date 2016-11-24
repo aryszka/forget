@@ -7,10 +7,12 @@ import (
 )
 
 type entry struct {
+	key                       string
 	segmentSize, size         int // better store size here, because there is less entries than segments
 	firstSegment, lastSegment node
 	discarded, writeComplete  bool
 	dataCond                  *sync.Cond
+	prevEntry, nextEntry      node
 }
 
 var (
@@ -24,12 +26,18 @@ var (
 )
 
 // entry doesn't hold a lock, but should be accessed in synchronized way
-func newEntry(segmentSize int) *entry {
+func newEntry(key string, segmentSize int) *entry {
 	return &entry{
+		key:         key,
 		dataCond:    sync.NewCond(&sync.Mutex{}),
 		segmentSize: segmentSize,
 	}
 }
+
+func (e *entry) prev() node     { return e.prevEntry }
+func (e *entry) next() node     { return e.nextEntry }
+func (e *entry) setPrev(p node) { e.prevEntry = p }
+func (e *entry) setNext(n node) { e.nextEntry = n }
 
 func (e *entry) waitData() {
 	e.dataCond.L.Lock()
@@ -57,17 +65,13 @@ func (e *entry) appendSegment(s *segment) {
 	e.lastSegment = s
 }
 
-func moveToPosition(segmentIndex, offset, segmentSize int) (int, bool) {
-	if (segmentIndex+1)*segmentSize <= offset {
-		return 0, false
-	}
-
+func moveToPosition(segmentIndex, offset, segmentSize int) int {
 	segmentOffset := offset - segmentIndex*segmentSize
 	if segmentOffset < 0 {
 		segmentOffset = 0
 	}
 
-	return segmentOffset, true
+	return segmentOffset
 }
 
 func (e *entry) read(offset int, p []byte) (int, error) {
@@ -89,33 +93,12 @@ func (e *entry) read(offset int, p []byte) (int, error) {
 
 	currentSegment, segmentIndex, count := e.firstSegment, 0, 0
 	for len(p) > 0 {
-		if currentSegment == nil {
-			if e.writeComplete {
-				return count, io.EOF
-			}
-
-			return count, nil
-		}
-
-		segmentOffset, ok := moveToPosition(segmentIndex, offset, e.segmentSize)
-		if !ok {
-			currentSegment = currentSegment.next()
-			segmentIndex++
-			continue
-		}
-
-		n, err := currentSegment.(*segment).read(segmentOffset, p)
+		segmentOffset := moveToPosition(segmentIndex, offset, e.segmentSize)
+		n := currentSegment.(*segment).read(segmentOffset, p)
 		p = p[n:]
 		count += n
-
-		if err != nil && err != io.EOF {
-			return count, err
-		}
-
 		currentSegment = currentSegment.next()
 		segmentIndex++
-
-		// case of not reading as much as possible not considered
 	}
 
 	return count, nil
@@ -126,59 +109,14 @@ func (e *entry) write(p []byte) (int, error) {
 		return 0, ErrItemDiscarded // TODO: decide on naming, entry or item
 	}
 
-	count := 0
-	for len(p) > 0 {
-		if e.lastSegment == nil {
-			return count, nil
-		}
-
-		n, err := e.lastSegment.(*segment).write(e.size%e.segmentSize, p)
-		p = p[n:]
-		count += n
-		e.size += n
-		if err != nil {
-			return count, err
-		}
-
-		if n == 0 {
-			e.lastSegment = e.lastSegment.next()
-		}
+	if e.lastSegment == nil {
+		return 0, nil
 	}
 
-	return count, nil
+	n := e.lastSegment.(*segment).write(e.size%e.segmentSize, p)
+	e.size += n
 
-	/*
-		currentSegment, segmentIndex, count := e.firstSegment, 0, 0
-		for len(p) > 0 && currentSegment != nil {
-			segmentOffset, ok := moveToPosition(segmentIndex, e.size, e.segmentSize)
-			if !ok {
-				if currentSegment == e.lastSegment {
-					currentSegment = nil
-				} else {
-					currentSegment = currentSegment.next()
-				}
-
-				segmentIndex++
-				continue
-			}
-
-			n, err := currentSegment.(*segment).write(segmentOffset, p)
-			p = p[n:]
-			count += n
-			e.size += n
-
-			if err != nil {
-				return count, err
-			}
-
-			currentSegment = currentSegment.next()
-			segmentIndex++
-
-			// case of not written full despite enough data ignored
-		}
-
-		return count, nil
-	*/
+	return n, nil
 }
 
 func (e *entry) closeWrite() error {

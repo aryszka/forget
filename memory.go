@@ -1,7 +1,5 @@
 package forget
 
-import "io"
-
 type segment struct {
 	data                     []byte
 	prevSegment, nextSegment node
@@ -21,20 +19,12 @@ func (s *segment) next() node     { return s.nextSegment }
 func (s *segment) setPrev(p node) { s.prevSegment = p }
 func (s *segment) setNext(n node) { s.nextSegment = n }
 
-func (s *segment) read(offset int, p []byte) (int, error) {
-	if offset >= len(s.data) {
-		return 0, io.EOF
-	}
-
-	return copy(p, s.data[offset:]), nil
+func (s *segment) read(offset int, p []byte) int {
+	return copy(p, s.data[offset:])
 }
 
-func (s *segment) write(offset int, p []byte) (int, error) {
-	if offset >= len(s.data) {
-		return 0, nil
-	}
-
-	return copy(s.data[offset:], p), nil
+func (s *segment) write(offset int, p []byte) int {
+	return copy(s.data[offset:], p)
 }
 
 func newMemory(segmentCount, segmentSize int) *memory {
@@ -58,10 +48,6 @@ func (m *memory) allocate() (*segment, bool) {
 }
 
 func (m *memory) move(s *segment, before node) {
-	if before == nil {
-		before = m.firstFree
-	}
-
 	m.segments.remove(s)
 	m.segments.insert(s, before)
 }

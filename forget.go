@@ -47,35 +47,10 @@ func (c *Cache) Get(key string) (io.ReadCloser, bool) {
 	return nil, false
 }
 
-// Set creates a cache item and returns a writer that can be used to store the assocated data.
-// The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
-// reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
-func (c *Cache) Set(key string) (io.WriteCloser, bool) {
-	c.mx.Lock()
-	defer c.mx.Unlock()
-
-	e, ok := c.cache.set(key)
-	if !ok {
-		return nil, false
-	}
-
-	return newWriter(c.mx, c.cache, e), true
-}
-
-// checks if a key is in the cache
+// GetKey checks if a key is in the cache.
 func (c *Cache) GetKey(key string) bool {
 	_, exists := c.Get(key)
 	return exists
-}
-
-// sets only a key without data
-func (c *Cache) SetKey(key string) bool {
-	if w, ok := c.Set(key); ok {
-		err := w.Close()
-		return err == nil
-	}
-
-	return false
 }
 
 // GetBytes retrieves an item from the cache with a key. If found, the second
@@ -91,6 +66,37 @@ func (c *Cache) GetBytes(key string) ([]byte, bool) {
 	b := bytes.NewBuffer(nil)
 	_, err := io.Copy(b, r)
 	return b.Bytes(), err == nil // TODO: which errors can happen here
+}
+
+// Set creates a cache item and returns a writer that can be used to store the assocated data.
+// The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
+// reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
+func (c *Cache) Set(key string) (io.WriteCloser, bool) {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	e, ok := c.cache.set(key)
+	if !ok {
+		return nil, false
+	}
+
+	return newWriter(c.mx, c.cache, e), true
+}
+
+// SetKey sets only a key without data.
+func (c *Cache) SetKey(key string) bool {
+	// once key in the fixed block:
+	//
+	// if w, ok := c.Set(key); ok {
+	// 	err := w.Close()
+	// 	return err == nil
+	// }
+	//
+	// return false
+
+	w, _ := c.Set(key)
+	w.Close()
+	return true
 }
 
 // SetBytes sets an item in the cache with a key.
@@ -127,10 +133,12 @@ func (c *Cache) Close() {
 }
 
 // memory
+// expiration
 // make sure reader is closed everywhere
 // overload handling: reader priority, writer priority, writer block
+// refactor tests
 // keyspaces
-// look for memory leak
+// verify no memory leak
 // max procs
 
 // once possible, make an http comparison

@@ -21,7 +21,10 @@ type writer struct {
 }
 
 var (
-	ErrWriteLimit   = errors.New("write limit")
+	// ErrWriteLimit is returned when writing to an item fills the available size.
+	ErrWriteLimit = errors.New("write limit")
+
+	// ErrWriterClosed is returned when writing to or closing a writer that was already closed before.
 	ErrWriterClosed = errors.New("writer closed")
 )
 
