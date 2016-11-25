@@ -3,11 +3,11 @@ package forget
 import "math/rand"
 
 const (
-	testKeyCount  = 3000
+	testKeyCount  = 300000
 	minKeyLength  = 6
 	maxKeyLength  = 30
 	minDataLength = 48
-	maxDataLength = 900
+	maxDataLength = 4096
 )
 
 var (

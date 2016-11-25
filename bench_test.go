@@ -1,33 +1,83 @@
 package forget
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"runtime"
 	"sync"
 	"testing"
 )
 
-const emulateMultiCoreMode = 4
+const (
+	emulateMultiCoreMode = 4
+	maxSize              = 1 << 30
+	segmentSize          = 1 << 10
+)
 
-func createCache(n int) []*Cache {
-	c := make([]*Cache, emulateMultiCoreMode)
+type cacheIFace interface {
+	Get(string) (io.ReadCloser, bool)
+	Set(string) (io.WriteCloser, bool)
+	Close()
+}
+
+type buffer struct {
+	buf *bytes.Buffer
+}
+
+type baselineMap map[string]*buffer
+
+func (b *buffer) Read(p []byte) (int, error)  { return b.buf.Read(p) }
+func (b *buffer) Write(p []byte) (int, error) { return b.buf.Write(p) }
+func (b *buffer) Close() error                { return nil }
+
+func newBaselineMap(o Options) cacheIFace {
+	return make(baselineMap)
+}
+
+func (m baselineMap) Get(key string) (io.ReadCloser, bool) {
+	b, ok := m[key]
+	return b, ok
+}
+
+func (m baselineMap) Set(key string) (io.WriteCloser, bool) {
+	b := &buffer{buf: bytes.NewBuffer(nil)}
+	m[key] = b
+	return b, true
+}
+
+func (m baselineMap) Close() {}
+
+func createCache(parallel, itemCount int, o Options, create func(Options) cacheIFace) []cacheIFace {
+	c := make([]cacheIFace, parallel)
+	o.MaxSize /= parallel
+	itemCount /= parallel
 	for i := 0; i < len(c); i++ {
-		c[i] = newTestCache()
-		for j := 0; j < n; j++ {
-			c[i].SetBytes(randomKey(), randomData())
+		c[i] = create(o)
+		for j := 0; j < itemCount; j++ {
+			w, ok := c[i].Set(randomKey())
+			if !ok {
+				panic("failed to set test data")
+			}
+
+			if _, err := io.Copy(w, bytes.NewBuffer(randomData())); err != nil {
+				panic(err)
+			}
 		}
 	}
 
 	return c
 }
 
-func runN(execute func(*Cache)) func([]*Cache, int) {
-	return func(c []*Cache, n int) {
+func runN(execute func([]cacheIFace)) func([]cacheIFace, int) {
+	return func(c []cacheIFace, n int) {
 		for i := 0; i < n; i++ {
-			execute(c[i%len(c)])
+			execute(c)
 		}
 	}
 }
 
-func runConcurrent(c []*Cache, total, concurrent int, run func([]*Cache, int)) {
+func runConcurrent(c []cacheIFace, total, concurrent int, run func([]cacheIFace, int)) {
 	n := total / concurrent
 	if total%concurrent != 0 {
 		n++
@@ -50,8 +100,8 @@ func runConcurrent(c []*Cache, total, concurrent int, run func([]*Cache, int)) {
 	wg.Wait()
 }
 
-func benchmark(b *testing.B, init, concurrent int, execute func(*Cache)) {
-	c := createCache(init)
+func benchmark(b *testing.B, parallel, itemCount, concurrent int, create func(Options) cacheIFace, execute func([]cacheIFace)) {
+	c := createCache(parallel, itemCount, Options{MaxSize: maxSize, SegmentSize: segmentSize}, create)
 	defer func() {
 		for _, ci := range c {
 			ci.Close()
@@ -62,50 +112,72 @@ func benchmark(b *testing.B, init, concurrent int, execute func(*Cache)) {
 	runConcurrent(c, b.N, concurrent, runN(execute))
 }
 
-func executeGet(c *Cache) {
-	c.GetBytes(randomKey())
+func executeKey(execute func(cacheIFace, string)) func([]cacheIFace) {
+	return func(c []cacheIFace) {
+		key := randomKey()
+		ci := c[int(key[0])%len(c)]
+		execute(ci, key)
+	}
 }
 
-func executeSet(c *Cache) {
-	c.SetBytes(randomKey(), randomData())
+func executeGet(c cacheIFace, key string) {
+	c.Get(key)
 }
 
-func BenchmarkGet_0_100000(b *testing.B)      { benchmark(b, 0, 100000, executeGet) }
-func BenchmarkGet_10_100000(b *testing.B)     { benchmark(b, 10, 100000, executeGet) }
-func BenchmarkGet_1000_100000(b *testing.B)   { benchmark(b, 1000, 100000, executeGet) }
-func BenchmarkGet_100000_100000(b *testing.B) { benchmark(b, 100000, 100000, executeGet) }
+func executeSet(c cacheIFace, key string) {
+	c.Set(key)
+}
 
-func BenchmarkSet_0_100000(b *testing.B)      { benchmark(b, 0, 100000, executeSet) }
-func BenchmarkSet_10_100000(b *testing.B)     { benchmark(b, 10, 100000, executeSet) }
-func BenchmarkSet_1000_100000(b *testing.B)   { benchmark(b, 1000, 100000, executeSet) }
-func BenchmarkSet_100000_100000(b *testing.B) { benchmark(b, 100000, 100000, executeSet) }
+func newForget(o Options) cacheIFace { return New(o) }
 
-func BenchmarkGet_0_1000(b *testing.B)      { benchmark(b, 0, 1000, executeGet) }
-func BenchmarkGet_10_1000(b *testing.B)     { benchmark(b, 10, 1000, executeGet) }
-func BenchmarkGet_1000_1000(b *testing.B)   { benchmark(b, 1000, 1000, executeGet) }
-func BenchmarkGet_100000_1000(b *testing.B) { benchmark(b, 100000, 1000, executeGet) }
+func benchmarkRange(b *testing.B, parallel, concurrent int, create func(Options) cacheIFace, execute func([]cacheIFace)) {
+	for _, itemCount := range []int{0, 10, 1000, 100000} {
+		if concurrent > parallel {
+			concurrent = parallel
+		}
 
-func BenchmarkSet_0_1000(b *testing.B)      { benchmark(b, 0, 1000, executeSet) }
-func BenchmarkSet_10_1000(b *testing.B)     { benchmark(b, 10, 1000, executeSet) }
-func BenchmarkSet_1000_1000(b *testing.B)   { benchmark(b, 1000, 1000, executeSet) }
-func BenchmarkSet_100000_1000(b *testing.B) { benchmark(b, 100000, 1000, executeSet) }
+		b.Run(fmt.Sprintf("item count = %d", itemCount), func(b *testing.B) {
+			benchmark(b, parallel, itemCount, concurrent, create, execute)
+		})
+	}
+}
 
-func BenchmarkGet_0_10(b *testing.B)      { benchmark(b, 0, 10, executeGet) }
-func BenchmarkGet_10_10(b *testing.B)     { benchmark(b, 10, 10, executeGet) }
-func BenchmarkGet_1000_10(b *testing.B)   { benchmark(b, 1000, 10, executeGet) }
-func BenchmarkGet_100000_10(b *testing.B) { benchmark(b, 100000, 10, executeGet) }
+func BenchmarkGet_Baseline_1(b *testing.B) {
+	benchmarkRange(b, 1, 1, newBaselineMap, executeKey(executeGet))
+}
 
-func BenchmarkSet_0_10(b *testing.B)      { benchmark(b, 0, 10, executeSet) }
-func BenchmarkSet_10_10(b *testing.B)     { benchmark(b, 10, 10, executeSet) }
-func BenchmarkSet_1000_10(b *testing.B)   { benchmark(b, 1000, 10, executeSet) }
-func BenchmarkSet_100000_10(b *testing.B) { benchmark(b, 100000, 10, executeSet) }
+func BenchmarkSet_Baseline_1(b *testing.B) {
+	benchmarkRange(b, 1, 1, newBaselineMap, executeKey(executeSet))
+}
 
-func BenchmarkGet_0_1(b *testing.B)      { benchmark(b, 0, 1, executeGet) }
-func BenchmarkGet_10_1(b *testing.B)     { benchmark(b, 10, 1, executeGet) }
-func BenchmarkGet_1000_1(b *testing.B)   { benchmark(b, 1000, 1, executeGet) }
-func BenchmarkGet_100000_1(b *testing.B) { benchmark(b, 100000, 1, executeGet) }
+func BenchmarkGet_NoConcurrency_1(b *testing.B) {
+	benchmarkRange(b, 1, 1, newForget, executeKey(executeGet))
+}
 
-func BenchmarkSet_0_1(b *testing.B)      { benchmark(b, 0, 1, executeSet) }
-func BenchmarkSet_10_1(b *testing.B)     { benchmark(b, 10, 1, executeSet) }
-func BenchmarkSet_1000_1(b *testing.B)   { benchmark(b, 1000, 1, executeSet) }
-func BenchmarkSet_100000_1(b *testing.B) { benchmark(b, 100000, 1, executeSet) }
+func BenchmarkSet_NoConcurrency_1(b *testing.B) {
+	benchmarkRange(b, 1, 1, newForget, executeKey(executeSet))
+}
+
+func BenchmarkGet_AllCores_100000(b *testing.B) {
+	benchmarkRange(b, runtime.GOMAXPROCS(-1), 100000, newForget, executeKey(executeGet))
+}
+
+func BenchmarkSet_AllCores_100000(b *testing.B) {
+	benchmarkRange(b, runtime.GOMAXPROCS(-1), 100000, newForget, executeKey(executeSet))
+}
+
+func BenchmarkGet_AllCores_1000(b *testing.B) {
+	benchmarkRange(b, runtime.GOMAXPROCS(-1), 1000, newForget, executeKey(executeGet))
+}
+
+func BenchmarkSet_AllCores_1000(b *testing.B) {
+	benchmarkRange(b, runtime.GOMAXPROCS(-1), 1000, newForget, executeKey(executeSet))
+}
+
+func BenchmarkGet_AllCores_10(b *testing.B) {
+	benchmarkRange(b, runtime.GOMAXPROCS(-1), 10, newForget, executeKey(executeGet))
+}
+
+func BenchmarkSet_AllCores_10(b *testing.B) {
+	benchmarkRange(b, runtime.GOMAXPROCS(-1), 10, newForget, executeKey(executeSet))
+}

@@ -20,7 +20,8 @@ func (s *segment) setPrev(p node) { s.prevSegment = p }
 func (s *segment) setNext(n node) { s.nextSegment = n }
 
 func (s *segment) read(offset int, p []byte) int {
-	return copy(p, s.data[offset:])
+	n := copy(p, s.data[offset:])
+	return n
 }
 
 func (s *segment) write(offset int, p []byte) int {

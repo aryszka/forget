@@ -2,6 +2,8 @@ package forget
 
 import (
 	"bytes"
+	"hash"
+	"hash/fnv"
 	"io"
 	"sync"
 )
@@ -14,21 +16,35 @@ type Options struct {
 
 	// SegmentSize defines the segment size in the memory.
 	SegmentSize int
+
+	hashing func() hash.Hash64
 }
 
 // Cache provides an in-memory cache for arbitrary binary data
 // identified by keyspace and key. All methods of Cache are thread safe.
 type Cache struct {
-	mx    *sync.Mutex
-	cache *cache
+	mx      *sync.Mutex
+	cache   *cache
+	hashing func() hash.Hash64
 }
 
 // New initializes a cache.
 func New(o Options) *Cache {
-	return &Cache{
-		mx:    &sync.Mutex{},
-		cache: newCache(o.MaxSize/o.SegmentSize, o.SegmentSize),
+	if o.hashing == nil {
+		o.hashing = fnv.New64a
 	}
+
+	return &Cache{
+		mx:      &sync.Mutex{},
+		cache:   newCache(o.MaxSize/o.SegmentSize, o.SegmentSize),
+		hashing: o.hashing,
+	}
+}
+
+func (c *Cache) hash(key string) uint64 {
+	h := c.hashing()
+	h.Write([]byte(key))
+	return h.Sum64()
 }
 
 // Get retrieves a reader to an item in the cache. The second return argument indicates if the item was
@@ -37,10 +53,12 @@ func New(o Options) *Cache {
 // returned. The reader returns ErrCacheClosed if the cache was closed and ErrItemDiscarded if
 // the original item with the given keyspace and key is not available anymore. The reader must be closed.
 func (c *Cache) Get(key string) (io.ReadCloser, bool) {
+	h := c.hash(key)
+
 	c.mx.Lock()
 	defer c.mx.Unlock()
 
-	if e, ok := c.cache.get(key); ok {
+	if e, ok := c.cache.get(id{hash: h, key: key}); ok {
 		return newReader(c.mx, e), true
 	}
 
@@ -72,10 +90,12 @@ func (c *Cache) GetBytes(key string) ([]byte, bool) {
 // The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
 // reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
 func (c *Cache) Set(key string) (io.WriteCloser, bool) {
+	id := id{hash: c.hash(key), key: key}
+
 	c.mx.Lock()
 	defer c.mx.Unlock()
 
-	e, ok := c.cache.set(key)
+	e, ok := c.cache.set(id)
 	if !ok {
 		return nil, false
 	}
@@ -120,9 +140,12 @@ func (c *Cache) SetBytes(key string, data []byte) bool {
 
 // Del deletes an item from the cache with a key.
 func (c *Cache) Del(key string) {
+	id := id{hash: c.hash(key), key: key}
+
 	c.mx.Lock()
 	defer c.mx.Unlock()
-	c.cache.del(key)
+
+	c.cache.del(id)
 }
 
 // Close shuts down the cache and releases resource.

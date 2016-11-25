@@ -34,7 +34,7 @@ func newReader(mx *sync.Mutex, e *entry) *reader {
 
 func newWriter(mx *sync.Mutex, c *cache, e *entry) *writer {
 	return &writer{
-		cio:   &cio{mx: mx, entry: e},
+		cio:   &cio{mx: mx, entry: e, offset: e.keySize},
 		cache: c,
 	}
 }

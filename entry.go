@@ -7,7 +7,8 @@ import (
 )
 
 type entry struct {
-	key                       string
+	hash                      uint64
+	keySize                   int
 	segmentSize, size         int // better store size here, because there is less entries than segments
 	firstSegment, lastSegment node
 	discarded, writeComplete  bool
@@ -26,9 +27,10 @@ var (
 )
 
 // entry doesn't hold a lock, but should be accessed in synchronized way
-func newEntry(key string, segmentSize int) *entry {
+func newEntry(hash uint64, keySize int, segmentSize int) *entry {
 	return &entry{
-		key:         key,
+		hash:        hash,
+		keySize:     keySize,
 		dataCond:    sync.NewCond(&sync.Mutex{}),
 		segmentSize: segmentSize,
 	}
@@ -74,7 +76,7 @@ func moveToPosition(segmentIndex, offset, segmentSize int) int {
 	return segmentOffset
 }
 
-func (e *entry) read(offset int, p []byte) (int, error) {
+func (e *entry) readData(offset int, p []byte) (int, error) {
 	if e.discarded {
 		return 0, ErrItemDiscarded // TODO: decide on naming, entry or item
 	}
@@ -102,6 +104,16 @@ func (e *entry) read(offset int, p []byte) (int, error) {
 	}
 
 	return count, nil
+}
+
+func (e *entry) read(offset int, p []byte) (int, error) {
+	return e.readData(offset+e.keySize, p)
+}
+
+func (e *entry) readKey() string {
+	k := make([]byte, e.keySize)
+	e.readData(0, k)
+	return string(k)
 }
 
 func (e *entry) write(p []byte) (int, error) {

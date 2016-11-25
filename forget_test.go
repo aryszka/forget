@@ -171,7 +171,7 @@ func TestGet(t *testing.T) {
 
 			b := bytes.NewBuffer(nil)
 			if n, err := io.Copy(b, r); int(n) != len(ti.data) || err != nil || !bytes.Equal(b.Bytes(), ti.data) {
-				t.Error("failed to read item")
+				t.Error("failed to read item", n, err, b.Bytes(), ti.data)
 				return
 			}
 		})
@@ -344,6 +344,8 @@ func TestReadZero(t *testing.T) {
 		return
 	}
 
+	defer r.Close()
+
 	if n, err := r.Read(nil); n != 0 || err != nil {
 		t.Error("invalid result on reading zero bytes")
 	}
@@ -358,6 +360,8 @@ func TestWriteZero(t *testing.T) {
 		t.Error("failed to set item")
 		return
 	}
+
+	defer w.Close()
 
 	if n, err := w.Write(nil); n != 0 || err != nil {
 		t.Error("invalid result on writing zero bytes")
@@ -374,9 +378,12 @@ func TestWaitForData(t *testing.T) {
 		return
 	}
 
+	defer w.Close()
+
 	var wg sync.WaitGroup
 	read := func() {
 		if r, ok := c.Get("foo"); ok {
+			defer r.Close()
 			b := bytes.NewBuffer(nil)
 			if _, err := io.Copy(b, r); err != nil || !bytes.Equal(b.Bytes(), []byte{1, 2, 3}) {
 				t.Error("failed to read data", err, b.Bytes())
@@ -419,6 +426,8 @@ func TestReadFromDeletedEntry(t *testing.T) {
 		return
 	}
 
+	defer r.Close()
+
 	c.Del("foo")
 
 	p := make([]byte, 3)
@@ -436,6 +445,8 @@ func TestWriteToDeletedEntry(t *testing.T) {
 		t.Error("failed to set item")
 		return
 	}
+
+	defer w.Close()
 
 	if _, err := w.Write([]byte{1, 2, 3}); err != nil {
 		t.Error("failed to write to item")
@@ -459,6 +470,8 @@ func TestWriteToCompleteEntry(t *testing.T) {
 		t.Error("failed to set item")
 		return
 	}
+
+	defer w.Close()
 
 	if _, err := w.Write([]byte{1, 2, 3}); err != nil {
 		t.Error("failed to write to item")
@@ -486,6 +499,8 @@ func TestCloseWriteTwice(t *testing.T) {
 		return
 	}
 
+	defer w.Close()
+
 	if _, err := w.Write([]byte{1, 2, 3}); err != nil {
 		t.Error("failed to write to item")
 		return
@@ -503,7 +518,7 @@ func TestCloseWriteTwice(t *testing.T) {
 }
 
 func TestEvict(t *testing.T) {
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}) {
@@ -528,7 +543,7 @@ func TestEvict(t *testing.T) {
 }
 
 func TestDoNotEvictCurrent(t *testing.T) {
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}) {
@@ -541,6 +556,8 @@ func TestDoNotEvictCurrent(t *testing.T) {
 		t.Error("failed to set item")
 		return
 	}
+
+	defer w.Close()
 
 	if !c.SetBytes("baz", []byte{4, 5, 6}) {
 		t.Error("failed to set item")
@@ -587,6 +604,8 @@ func TestFailToEvict(t *testing.T) {
 		return
 	}
 
+	defer w.Close()
+
 	if n, err := w.Write([]byte{7, 8, 9, 0, 1, 2, 3, 4, 6}); n != 6 || err != ErrWriteLimit {
 		t.Error("failed to report write failure", n, err)
 		return
@@ -594,7 +613,7 @@ func TestFailToEvict(t *testing.T) {
 }
 
 func TestTryReadBeyondAvailable(t *testing.T) {
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
 	w, ok := c.Set("foo")
@@ -602,6 +621,8 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 		t.Error("failed to set item")
 		return
 	}
+
+	defer w.Close()
 
 	if n, err := w.Write([]byte{1, 2, 3}); n != 3 || err != nil {
 		t.Error("failed to write item")
@@ -613,6 +634,8 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 		t.Error("failed to get item")
 		return
 	}
+
+	defer r.Close()
 
 	p := make([]byte, 5)
 	if n, err := r.Read(p); n != 3 || err != nil {
@@ -634,4 +657,83 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 	}
 
 	<-done
+}
+
+func TestWriteAfterCacheClosed(t *testing.T) {
+	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	w, ok := c.Set("foo")
+	if !ok {
+		t.Error("failed to set item")
+		return
+	}
+
+	defer w.Close()
+
+	c.Close()
+	if _, err := w.Write([]byte{1, 2, 3, 4, 5, 6}); err != ErrItemDiscarded {
+		t.Error("expected ErrItemDiscarded but got", err)
+	}
+}
+
+func TestKeyTooLarge(t *testing.T) {
+	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	defer c.Close()
+	if _, ok := c.Set("123456789012345"); ok {
+		t.Error("too large key was set")
+	}
+
+	if c.GetKey("123456789012345") {
+		t.Error("too large key was set")
+	}
+}
+
+func TestWriteAtSegmentBoundary(t *testing.T) {
+	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	defer c.Close()
+
+	w, ok := c.Set("foo")
+	if !ok {
+		t.Error("failed to create item")
+		return
+	}
+
+	// currently it should block at GetBytes()
+	defer w.Close()
+
+	if n, err := w.Write([]byte{1, 2, 3}); n != 3 || err != nil {
+		t.Error("failed to write to item", n, err)
+		return
+	}
+
+	if n, err := w.Write([]byte{4, 5, 6}); n != 3 || err != nil {
+		t.Error("failed to write to item", n, err)
+		return
+	}
+
+	if b, ok := c.GetBytes("foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3, 4, 5, 6}) {
+		t.Error("failed to read item", ok, b)
+	}
+}
+
+func TestWriteToItemWithEmptyKey(t *testing.T) {
+	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	defer c.Close()
+
+	w, ok := c.Set("")
+	if !ok {
+		t.Error("failed to create item")
+		return
+	}
+
+	// currently it should block at GetBytes()
+	defer w.Close()
+
+	if n, err := w.Write([]byte{1, 2, 3}); n != 3 || err != nil {
+		t.Error("failed to write to item", n, err)
+		return
+	}
+
+	if b, ok := c.GetBytes("foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+		t.Error("failed to read item", ok, b)
+	}
 }
