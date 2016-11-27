@@ -230,7 +230,7 @@ var delTests = []opTest{{
 }}
 
 func newTestCache() *Cache {
-	return New(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	return New(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 }
 
 func initTestCache(init testInit) *Cache {
@@ -368,7 +368,7 @@ func TestSetKey(t *testing.T) {
 }
 
 func TestSetBytesOversized(t *testing.T) {
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 6, SegmentSize: 3, maxProcs: 1})
 	defer c.Close()
 
 	if c.SetBytes("s1", "foo", []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}, time.Hour) {
@@ -633,7 +633,7 @@ func TestCloseWriteTwice(t *testing.T) {
 }
 
 func TestEvict(t *testing.T) {
-	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	c := New(Options{MaxSize: 12, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -658,7 +658,7 @@ func TestEvict(t *testing.T) {
 }
 
 func TestDoNotEvictCurrent(t *testing.T) {
-	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	c := New(Options{MaxSize: 12, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -705,7 +705,7 @@ func TestDoNotEvictCurrent(t *testing.T) {
 }
 
 func TestFailToEvict(t *testing.T) {
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 6, SegmentSize: 3, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -732,7 +732,7 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	c := New(Options{MaxSize: 12, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 
 	w, ok := c.Set("s1", "foo", time.Hour)
@@ -779,7 +779,7 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 }
 
 func TestWriteAfterCacheClosed(t *testing.T) {
-	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	c := New(Options{MaxSize: 12, SegmentSize: 6, maxProcs: 1})
 	w, ok := c.Set("s1", "foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
@@ -795,7 +795,7 @@ func TestWriteAfterCacheClosed(t *testing.T) {
 }
 
 func TestKeyTooLarge(t *testing.T) {
-	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	c := New(Options{MaxSize: 12, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 	if _, ok := c.Set("s1", "123456789012345", time.Hour); ok {
 		t.Error("too large key was set")
@@ -807,7 +807,7 @@ func TestKeyTooLarge(t *testing.T) {
 }
 
 func TestWriteAtSegmentBoundary(t *testing.T) {
-	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	c := New(Options{MaxSize: 12, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 
 	w, ok := c.Set("s1", "foo", time.Hour)
@@ -839,7 +839,7 @@ func TestWriteAtSegmentBoundary(t *testing.T) {
 }
 
 func TestWriteToItemWithEmptyKey(t *testing.T) {
-	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	c := New(Options{MaxSize: 12, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 
 	w, ok := c.Set("s1", "", time.Hour)
@@ -864,7 +864,7 @@ func TestWriteToItemWithEmptyKey(t *testing.T) {
 }
 
 func TestAllocateAndInsert(t *testing.T) {
-	c := New(Options{MaxSize: 24, SegmentSize: 6})
+	c := New(Options{MaxSize: 24, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 
 	w, ok := c.Set("s1", "foo", time.Hour)
@@ -886,7 +886,7 @@ func TestAllocateAndInsert(t *testing.T) {
 }
 
 func TestGetEmptyItem(t *testing.T) {
-	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	c := New(Options{MaxSize: 12, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetKey("s1", "", time.Hour) {
@@ -899,7 +899,7 @@ func TestGetEmptyItem(t *testing.T) {
 }
 
 func TestItemsWithDifferentKeys(t *testing.T) {
-	c := New(Options{MaxSize: 24, SegmentSize: 6})
+	c := New(Options{MaxSize: 24, SegmentSize: 6, maxProcs: 1})
 	c.SetKey("s1", "1", time.Hour)
 	c.SetKey("s1", "123", time.Hour)
 	c.SetKey("s1", "123456789", time.Hour)
@@ -913,7 +913,7 @@ func TestExpiration(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{MaxSize: 24, SegmentSize: 6})
+	c := New(Options{MaxSize: 24, SegmentSize: 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetKey("s1", "foo", 3*time.Millisecond) {
@@ -932,7 +932,7 @@ func TestDoNotEvictWhenReading(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 6, SegmentSize: 3, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -967,7 +967,7 @@ func TestDoNotEvictWhenReading(t *testing.T) {
 }
 
 func TestTooLargeKey(t *testing.T) {
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 6, SegmentSize: 3, maxProcs: 1})
 	defer c.Close()
 
 	if c.SetKey("s1", "123456789", time.Hour) {
@@ -976,7 +976,7 @@ func TestTooLargeKey(t *testing.T) {
 }
 
 func TestReadFromClosedCache(t *testing.T) {
-	c := New(Options{MaxSize: 24, SegmentSize: 6})
+	c := New(Options{MaxSize: 24, SegmentSize: 6, maxProcs: 1})
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
 		t.Error("failed to set item")
 		return
@@ -1001,7 +1001,7 @@ func TestBlockWriterUntilSpaceAvailable(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{MaxSize: 9, SegmentSize: 3})
+	c := New(Options{MaxSize: 9, SegmentSize: 3, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -1033,7 +1033,7 @@ func TestBlockWriterUntilSpaceAvailable(t *testing.T) {
 }
 
 func TestSingleSpaceGet(t *testing.T) {
-	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1056,7 +1056,7 @@ func TestSingleSpaceGet(t *testing.T) {
 }
 
 func TestSingleSpaceGetKey(t *testing.T) {
-	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1070,7 +1070,7 @@ func TestSingleSpaceGetKey(t *testing.T) {
 }
 
 func TestSingleSpaceGetBytes(t *testing.T) {
-	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1084,7 +1084,7 @@ func TestSingleSpaceGetBytes(t *testing.T) {
 }
 
 func TestSingleSpaceSet(t *testing.T) {
-	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 	defer c.Close()
 
 	w, ok := c.Set("foo", time.Hour)
@@ -1106,7 +1106,7 @@ func TestSingleSpaceSet(t *testing.T) {
 }
 
 func TestSingleSpaceSetKey(t *testing.T) {
-	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetKey("foo", time.Hour) {
@@ -1119,7 +1119,7 @@ func TestSingleSpaceSetKey(t *testing.T) {
 }
 
 func TestSingleSpaceSetBytes(t *testing.T) {
-	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1132,7 +1132,7 @@ func TestSingleSpaceSetBytes(t *testing.T) {
 }
 
 func TestSingleSpaceDel(t *testing.T) {
-	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1148,7 +1148,7 @@ func TestSingleSpaceDel(t *testing.T) {
 }
 
 func TestSingleSpaceClose(t *testing.T) {
-	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+	c := NewSingleSpace(Options{MaxSize: 1 << 9, SegmentSize: 1 << 6, maxProcs: 1})
 	defer c.Close()
 
 	c.SetBytes("foo", []byte{1, 2, 3}, time.Hour)
@@ -1180,7 +1180,7 @@ func TestSingleSpaceClose(t *testing.T) {
 }
 
 func TestEvictFirstFromOwnKeyspace(t *testing.T) {
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 6, SegmentSize: 3, maxProcs: 1})
 	defer c.Close()
 
 	if !c.SetKey("s1", "foo", time.Hour) {
@@ -1209,7 +1209,7 @@ func TestEvictFirstFromOwnKeyspace(t *testing.T) {
 }
 
 func TestEvictFromOtherKeyspace(t *testing.T) {
-	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	c := New(Options{MaxSize: 6, SegmentSize: 3, maxProcs: 1})
 	defer c.Close()
 
 	for ks, k := range map[string]string{
@@ -1225,7 +1225,7 @@ func TestEvictFromOtherKeyspace(t *testing.T) {
 }
 
 func TestEvictFromOtherKeyspaceRoundRobin(t *testing.T) {
-	c := New(Options{MaxSize: 18, SegmentSize: 3})
+	c := New(Options{MaxSize: 18, SegmentSize: 3, maxProcs: 1})
 	defer c.Close()
 
 	for ks, k := range map[string][]string{
@@ -1252,5 +1252,34 @@ func TestEvictFromOtherKeyspaceRoundRobin(t *testing.T) {
 	if !c.SetKey("s5", "foobarbazquxquux", time.Hour) {
 		t.Error("failed to set item")
 		return
+	}
+}
+
+func TestUseMaxProcsDefault(t *testing.T) {
+	c := New(Options{MaxSize: 1 << 12, SegmentSize: 1 << 6})
+	defer c.Close()
+
+	items := map[string][]string{
+		"s1": {"foo", "bar", "baz", "qux", "quux"},
+		"s2": {"foo", "bar", "baz", "qux", "quux"},
+		"s3": {"foo", "bar", "baz", "qux", "quux"},
+	}
+
+	for ks, k := range items {
+		for _, ki := range k {
+			if !c.SetKey(ks, ki, time.Hour) {
+				t.Error("failed to set item")
+				return
+			}
+		}
+	}
+
+	for ks, k := range items {
+		for _, ki := range k {
+			if !c.GetKey(ks, ki) {
+				t.Error("failed to get item", ks, ki)
+				return
+			}
+		}
 	}
 }

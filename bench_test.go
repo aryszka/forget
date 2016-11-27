@@ -49,36 +49,31 @@ func (m baselineMap) Set(_, key string, _ time.Duration) (io.WriteCloser, bool) 
 
 func (m baselineMap) Close() {}
 
-func createCache(parallel, itemCount int, o Options, create func(Options) cacheIFace) []cacheIFace {
-	c := make([]cacheIFace, parallel)
-	o.MaxSize /= parallel
-	itemCount /= parallel
-	for i := 0; i < len(c); i++ {
-		c[i] = create(o)
-		for j := 0; j < itemCount; j++ {
-			w, ok := c[i].Set("", randomKey(), time.Hour)
-			if !ok {
-				panic("failed to set test data")
-			}
+func createCache(itemCount int, o Options, create func(Options) cacheIFace) cacheIFace {
+	c := create(o)
+	for j := 0; j < itemCount; j++ {
+		w, ok := c.Set("", randomKey(), time.Hour)
+		if !ok {
+			panic("failed to set test data")
+		}
 
-			if _, err := io.Copy(w, bytes.NewBuffer(randomData())); err != nil {
-				panic(err)
-			}
+		if _, err := io.Copy(w, bytes.NewBuffer(randomData())); err != nil {
+			panic(err)
 		}
 	}
 
 	return c
 }
 
-func runN(execute func([]cacheIFace)) func([]cacheIFace, int) {
-	return func(c []cacheIFace, n int) {
+func runN(execute func(cacheIFace)) func(cacheIFace, int) {
+	return func(c cacheIFace, n int) {
 		for i := 0; i < n; i++ {
 			execute(c)
 		}
 	}
 }
 
-func runConcurrent(c []cacheIFace, total, concurrent int, run func([]cacheIFace, int)) {
+func runConcurrent(c cacheIFace, total, concurrent int, run func(cacheIFace, int)) {
 	n := total / concurrent
 	if total%concurrent != 0 {
 		n++
@@ -101,41 +96,41 @@ func runConcurrent(c []cacheIFace, total, concurrent int, run func([]cacheIFace,
 	wg.Wait()
 }
 
-func benchmark(b *testing.B, parallel, itemCount, concurrent int, create func(Options) cacheIFace, execute func([]cacheIFace)) {
+func benchmark(b *testing.B, parallel, itemCount, concurrent int, create func(Options) cacheIFace, execute func(cacheIFace)) {
 	if !randomInitialized {
 		initRandom()
 	}
 
-	c := createCache(parallel, itemCount, Options{MaxSize: maxSize, SegmentSize: segmentSize}, create)
-	defer func() {
-		for _, ci := range c {
-			ci.Close()
-		}
-	}()
+	c := createCache(itemCount, Options{MaxSize: maxSize, SegmentSize: segmentSize, maxProcs: parallel}, create)
+	defer c.Close()
 
 	b.ResetTimer()
 	runConcurrent(c, b.N, concurrent, runN(execute))
 }
 
-func executeKey(execute func(cacheIFace, string)) func([]cacheIFace) {
-	return func(c []cacheIFace) {
-		key := randomKey()
-		ci := c[int(key[0])%len(c)]
-		execute(ci, key)
+func executeKey(execute func(cacheIFace, string)) func(cacheIFace) {
+	return func(c cacheIFace) {
+		execute(c, randomKey())
 	}
 }
 
 func executeGet(c cacheIFace, key string) {
-	c.Get("", key)
+	if r, ok := c.Get("", key); ok {
+		r.Close()
+	}
 }
 
 func executeSet(c cacheIFace, key string) {
-	c.Set("", key, time.Hour)
+	if w, ok := c.Set("", key, time.Hour); !ok {
+		panic("failed to set key")
+	} else {
+		w.Close()
+	}
 }
 
 func newForget(o Options) cacheIFace { return New(o) }
 
-func benchmarkRange(b *testing.B, parallel, concurrent int, create func(Options) cacheIFace, execute func([]cacheIFace)) {
+func benchmarkRange(b *testing.B, parallel, concurrent int, create func(Options) cacheIFace, execute func(cacheIFace)) {
 	for _, itemCount := range []int{0, 10, 1000, 100000} {
 		if concurrent > parallel {
 			concurrent = parallel

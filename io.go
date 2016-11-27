@@ -51,9 +51,9 @@ func newReader(mx rwLocker, readCond *sync.Cond, e *entry, segmentSize int) *rea
 	}
 }
 
-func newWriter(mx rwLocker, readCond *sync.Cond, c *cache, e *entry) *writer {
+func newWriter(c *cache, e *entry) *writer {
 	return &writer{
-		cio:   &cio{mx: mx, readCond: readCond, entry: e},
+		cio:   &cio{mx: c.mx, readCond: c.readCond, entry: e},
 		cache: c,
 	}
 }

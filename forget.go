@@ -5,7 +5,7 @@ import (
 	"hash"
 	"hash/fnv"
 	"io"
-	"sync"
+	"runtime"
 	"time"
 )
 
@@ -18,16 +18,15 @@ type Options struct {
 	// SegmentSize defines the segment size in the memory.
 	SegmentSize int
 
-	hashing func() hash.Hash64
+	hashing  func() hash.Hash64
+	maxProcs int
 }
 
 // Cache provides an in-memory cache for arbitrary binary data
 // identified by keyspace and key. All methods of Cache are thread safe.
 type Cache struct {
-	mx       *sync.RWMutex
-	readCond *sync.Cond
-	cache    *cache
-	hashing  func() hash.Hash64
+	cache   []*cache
+	hashing func() hash.Hash64
 }
 
 // SingleSpace is equivalent to Cache but it doesn't use keyspaces.
@@ -41,11 +40,19 @@ func New(o Options) *Cache {
 		o.hashing = fnv.New64a
 	}
 
+	if o.maxProcs <= 0 {
+		o.maxProcs = runtime.GOMAXPROCS(-1)
+	}
+
+	o.MaxSize /= o.maxProcs
+	c := make([]*cache, o.maxProcs)
+	for i := range c {
+		c[i] = newCache(o.MaxSize/o.SegmentSize, o.SegmentSize)
+	}
+
 	return &Cache{
-		mx:       &sync.RWMutex{},
-		readCond: sync.NewCond(&sync.Mutex{}),
-		cache:    newCache(o.MaxSize/o.SegmentSize, o.SegmentSize),
-		hashing:  o.hashing,
+		cache:   c,
+		hashing: o.hashing,
 	}
 }
 
@@ -55,6 +62,11 @@ func (c *Cache) hash(key string) uint64 {
 	return h.Sum64()
 }
 
+func (c *Cache) getCache(hash uint64) *cache {
+	// TODO: >> 32 for the fnv last byte thing, but not sure about it, needs testing of distribution
+	return c.cache[int(hash>>32)%len(c.cache)]
+}
+
 // Get retrieves a reader to an item in the cache. The second return argument indicates if the item was
 // found. Reading can start before writing to the item was finished. The reader blocks if the read reaches the point that
 // the writer didn't pass yet. If the write finished, and the reader reaches the end of the item, EOF is
@@ -62,12 +74,13 @@ func (c *Cache) hash(key string) uint64 {
 // the original item with the given keyspace and key is not available anymore. The reader must be closed.
 func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 	h := c.hash(key)
+	ci := c.getCache(h)
 
-	c.mx.Lock()
-	defer c.mx.Unlock()
+	ci.mx.Lock()
+	defer ci.mx.Unlock()
 
-	if e, ok := c.cache.get(id{hash: h, keyspace: keyspace, key: key}); ok {
-		return newReader(c.mx, c.readCond, e, c.cache.segmentSize), true
+	if e, ok := ci.get(id{hash: h, keyspace: keyspace, key: key}); ok {
+		return newReader(ci.mx, ci.readCond, e, ci.segmentSize), true
 	}
 
 	return nil, false
@@ -100,30 +113,33 @@ func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 	return b.Bytes(), err == nil // TODO: which errors can happen here
 }
 
-func (c *Cache) setItem(id id, ttl time.Duration) (*entry, error) {
+func setItem(c *cache, id id, ttl time.Duration) (*entry, error) {
 	c.mx.Lock()
 	defer c.mx.Unlock()
-	return c.cache.set(id, ttl)
+	return c.set(id, ttl)
 }
 
 // Set creates a cache item and returns a writer that can be used to store the assocated data.
 // The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
 // reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
 func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
-	if len(key) > c.cache.segmentCount*c.cache.segmentSize {
+	h := c.hash(key)
+	ci := c.getCache(h)
+
+	if len(key) > ci.segmentCount*ci.segmentSize {
 		return nil, false
 	}
 
-	id := id{hash: c.hash(key), keyspace: keyspace, key: key}
+	id := id{hash: h, keyspace: keyspace, key: key}
 	for {
-		if e, err := c.setItem(id, ttl); err == errAllocationForKeyFailed {
-			c.readCond.L.Lock()
-			c.readCond.Wait()
-			c.readCond.L.Unlock()
+		if e, err := setItem(ci, id, ttl); err == errAllocationForKeyFailed {
+			ci.readCond.L.Lock()
+			ci.readCond.Wait()
+			ci.readCond.L.Unlock()
 		} else if err != nil {
 			return nil, false
 		} else {
-			return newWriter(c.mx, c.readCond, c.cache, e), true
+			return newWriter(ci, e), true
 		}
 	}
 }
@@ -154,19 +170,25 @@ func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) b
 
 // Del deletes an item from the cache with a key.
 func (c *Cache) Del(keyspace, key string) {
-	id := id{hash: c.hash(key), keyspace: keyspace, key: key}
+	h := c.hash(key)
+	ci := c.getCache(h)
 
-	c.mx.Lock()
-	defer c.mx.Unlock()
+	id := id{hash: h, keyspace: keyspace, key: key}
 
-	c.cache.del(id)
+	ci.mx.Lock()
+	defer ci.mx.Unlock()
+	ci.del(id)
 }
 
 // Close shuts down the cache and releases resource.
 func (c *Cache) Close() {
-	c.mx.Lock()
-	defer c.mx.Unlock()
-	c.cache.close()
+	for _, ci := range c.cache {
+		func() {
+			ci.mx.Lock()
+			defer ci.mx.Unlock()
+			ci.close()
+		}()
+	}
 }
 
 // NewSingleSpace is like New() but initializes a cache that doesn't use

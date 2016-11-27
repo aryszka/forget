@@ -2,6 +2,7 @@ package forget
 
 import (
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,8 @@ type id struct {
 
 type cache struct {
 	segmentCount, segmentSize, lruIndex int
+	mx                                  *sync.RWMutex
+	readCond                            *sync.Cond
 	memory                              *memory
 	toDelete                            *list
 	lru                                 map[string]*list
@@ -32,6 +35,8 @@ func newCache(segmentCount, segmentSize int) *cache {
 	return &cache{
 		segmentCount: segmentCount,
 		segmentSize:  segmentSize,
+		mx:           &sync.RWMutex{},
+		readCond:     sync.NewCond(&sync.Mutex{}),
 		memory:       newMemory(segmentCount, segmentSize),
 		lru:          make(map[string]*list),
 		toDelete:     new(list),
