@@ -13,8 +13,9 @@ type rwLocker interface {
 }
 
 type cio struct {
-	mx    rwLocker
-	entry *entry
+	mx       rwLocker
+	readCond *sync.Cond
+	entry    *entry
 }
 
 type reader struct {
@@ -26,6 +27,7 @@ type reader struct {
 type writer struct {
 	*cio
 	cache *cache
+	size  int
 }
 
 var (
@@ -40,18 +42,18 @@ var (
 	ErrWriterClosed = errors.New("writer closed")
 )
 
-func newReader(mx rwLocker, e *entry, segmentSize int) *reader {
+func newReader(mx rwLocker, readCond *sync.Cond, e *entry, segmentSize int) *reader {
 	return &reader{
-		cio:             &cio{mx: mx, entry: e},
+		cio:             &cio{mx: mx, readCond: readCond, entry: e},
 		segmentSize:     segmentSize,
 		currentSegment:  e.firstSegment,
 		segmentPosition: e.keySize,
 	}
 }
 
-func newWriter(mx rwLocker, c *cache, e *entry) *writer {
+func newWriter(mx rwLocker, readCond *sync.Cond, c *cache, e *entry) *writer {
 	return &writer{
-		cio:   &cio{mx: mx, entry: e},
+		cio:   &cio{mx: mx, readCond: readCond, entry: e},
 		cache: c,
 	}
 }
@@ -99,7 +101,7 @@ func (r *reader) Read(p []byte) (int, error) {
 		}
 
 		if n == 0 {
-			r.entry.waitData()
+			r.entry.waitWrite()
 		}
 	}
 
@@ -107,8 +109,34 @@ func (r *reader) Read(p []byte) (int, error) {
 }
 
 func (r *reader) Close() error {
+	r.mx.Lock()
+	defer r.readCond.Broadcast()
+	defer r.mx.Unlock()
+
+	r.entry.decReading()
 	r.entry = nil
 	return nil
+}
+
+func (w *writer) writeOne(p []byte) (int, bool, error) {
+	w.mx.Lock()
+	defer w.entry.broadcastWrite()
+	defer w.mx.Unlock()
+
+	n, err := w.entry.write(p)
+
+	var allocationFailed bool
+	if n < len(p) && err == nil {
+		allocationFailed = !w.cache.allocateFor(w.entry)
+	}
+
+	return n, allocationFailed, err
+}
+
+func (w *writer) waitReadCond() {
+	w.readCond.L.Lock()
+	w.readCond.Wait()
+	w.readCond.L.Unlock()
 }
 
 func (w *writer) Write(p []byte) (int, error) {
@@ -120,22 +148,28 @@ func (w *writer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	w.mx.Lock()
-	defer w.mx.Unlock()
-
+	max := w.cache.segmentCount*w.cache.segmentSize - w.entry.keySize
 	var count int
-	for {
-		n, err := w.entry.write(p)
+	for len(p) > 0 {
+		n, allocationFailed, err := w.writeOne(p)
 		p = p[n:]
 		count += n
-		if len(p) == 0 || err != nil {
+		w.size += n
+
+		if err != nil {
 			return count, err
 		}
 
-		if !w.cache.allocateFor(w.entry) {
+		if len(p) > 0 && w.size == max {
 			return count, ErrWriteLimit
 		}
+
+		if allocationFailed {
+			w.waitReadCond()
+		}
 	}
+
+	return count, nil
 }
 
 func (w *writer) Close() error {
@@ -143,13 +177,11 @@ func (w *writer) Close() error {
 		return ErrWriterClosed
 	}
 
-	err := func() error {
-		w.mx.Lock()
-		defer w.mx.Unlock()
-		return w.entry.closeWrite()
-	}()
+	w.mx.Lock()
+	defer w.entry.broadcastWrite()
+	defer w.mx.Unlock()
 
-	w.entry.broadcastData()
+	err := w.entry.closeWrite()
 	w.entry = nil
 	w.cache = nil
 	return err

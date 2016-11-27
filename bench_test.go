@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -17,7 +18,7 @@ const (
 
 type cacheIFace interface {
 	Get(string) (io.ReadCloser, bool)
-	Set(string) (io.WriteCloser, bool)
+	Set(string, time.Duration) (io.WriteCloser, bool)
 	Close()
 }
 
@@ -40,7 +41,7 @@ func (m baselineMap) Get(key string) (io.ReadCloser, bool) {
 	return b, ok
 }
 
-func (m baselineMap) Set(key string) (io.WriteCloser, bool) {
+func (m baselineMap) Set(key string, _ time.Duration) (io.WriteCloser, bool) {
 	b := &buffer{buf: bytes.NewBuffer(nil)}
 	m[key] = b
 	return b, true
@@ -55,7 +56,7 @@ func createCache(parallel, itemCount int, o Options, create func(Options) cacheI
 	for i := 0; i < len(c); i++ {
 		c[i] = create(o)
 		for j := 0; j < itemCount; j++ {
-			w, ok := c[i].Set(randomKey())
+			w, ok := c[i].Set(randomKey(), time.Hour)
 			if !ok {
 				panic("failed to set test data")
 			}
@@ -101,6 +102,10 @@ func runConcurrent(c []cacheIFace, total, concurrent int, run func([]cacheIFace,
 }
 
 func benchmark(b *testing.B, parallel, itemCount, concurrent int, create func(Options) cacheIFace, execute func([]cacheIFace)) {
+	if !randomInitialized {
+		initRandom()
+	}
+
 	c := createCache(parallel, itemCount, Options{MaxSize: maxSize, SegmentSize: segmentSize}, create)
 	defer func() {
 		for _, ci := range c {
@@ -125,7 +130,7 @@ func executeGet(c cacheIFace, key string) {
 }
 
 func executeSet(c cacheIFace, key string) {
-	c.Set(key)
+	c.Set(key, time.Hour)
 }
 
 func newForget(o Options) cacheIFace { return New(o) }

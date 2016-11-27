@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"io"
 	"sync"
+	"time"
 )
 
 // Options objects are used to pass in parameters to new Cache instances.
@@ -23,9 +24,10 @@ type Options struct {
 // Cache provides an in-memory cache for arbitrary binary data
 // identified by keyspace and key. All methods of Cache are thread safe.
 type Cache struct {
-	mx      *sync.RWMutex
-	cache   *cache
-	hashing func() hash.Hash64
+	mx       *sync.RWMutex
+	readCond *sync.Cond
+	cache    *cache
+	hashing  func() hash.Hash64
 }
 
 // New initializes a cache.
@@ -35,9 +37,10 @@ func New(o Options) *Cache {
 	}
 
 	return &Cache{
-		mx:      &sync.RWMutex{},
-		cache:   newCache(o.MaxSize/o.SegmentSize, o.SegmentSize),
-		hashing: o.hashing,
+		mx:       &sync.RWMutex{},
+		readCond: sync.NewCond(&sync.Mutex{}),
+		cache:    newCache(o.MaxSize/o.SegmentSize, o.SegmentSize),
+		hashing:  o.hashing,
 	}
 }
 
@@ -59,7 +62,7 @@ func (c *Cache) Get(key string) (io.ReadCloser, bool) {
 	defer c.mx.Unlock()
 
 	if e, ok := c.cache.get(id{hash: h, key: key}); ok {
-		return newReader(c.mx, e, c.cache.segmentSize), true
+		return newReader(c.mx, c.readCond, e, c.cache.segmentSize), true
 	}
 
 	return nil, false
@@ -67,8 +70,12 @@ func (c *Cache) Get(key string) (io.ReadCloser, bool) {
 
 // GetKey checks if a key is in the cache.
 func (c *Cache) GetKey(key string) bool {
-	_, exists := c.Get(key)
-	return exists
+	if r, exists := c.Get(key); exists {
+		r.Close()
+		return true
+	}
+
+	return false
 }
 
 // GetBytes retrieves an item from the cache with a key. If found, the second
@@ -88,49 +95,53 @@ func (c *Cache) GetBytes(key string) ([]byte, bool) {
 	return b.Bytes(), err == nil // TODO: which errors can happen here
 }
 
+func (c *Cache) setItem(id id, ttl time.Duration) (*entry, error) {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+	return c.cache.set(id, ttl)
+}
+
 // Set creates a cache item and returns a writer that can be used to store the assocated data.
 // The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
 // reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
-func (c *Cache) Set(key string) (io.WriteCloser, bool) {
-	id := id{hash: c.hash(key), key: key}
-
-	c.mx.Lock()
-	defer c.mx.Unlock()
-
-	e, ok := c.cache.set(id)
-	if !ok {
+func (c *Cache) Set(key string, ttl time.Duration) (io.WriteCloser, bool) {
+	if len(key) > c.cache.segmentCount*c.cache.segmentSize {
 		return nil, false
 	}
 
-	return newWriter(c.mx, c.cache, e), true
+	id := id{hash: c.hash(key), key: key}
+	for {
+		if e, err := c.setItem(id, ttl); err == errAllocationForKeyFailed {
+			c.readCond.L.Lock()
+			c.readCond.Wait()
+			c.readCond.L.Unlock()
+		} else if err != nil {
+			return nil, false
+		} else {
+			return newWriter(c.mx, c.readCond, c.cache, e), true
+		}
+	}
 }
 
 // SetKey sets only a key without data.
-func (c *Cache) SetKey(key string) bool {
-	// once key in the fixed block:
-	//
-	// if w, ok := c.Set(key); ok {
-	// 	err := w.Close()
-	// 	return err == nil
-	// }
-	//
-	// return false
+func (c *Cache) SetKey(key string, ttl time.Duration) bool {
+	if w, ok := c.Set(key, ttl); ok {
+		err := w.Close()
+		return err == nil
+	}
 
-	w, _ := c.Set(key)
-	w.Close()
-	return true
+	return false
 }
 
 // SetBytes sets an item in the cache with a key.
-func (c *Cache) SetBytes(key string, data []byte) bool {
-	w, ok := c.Set(key)
+func (c *Cache) SetBytes(key string, data []byte, ttl time.Duration) bool {
+	w, ok := c.Set(key, ttl)
 	if !ok {
 		return false
 	}
 
 	defer w.Close()
 
-	// TODO: which errors can happen here
 	b := bytes.NewBuffer(data)
 	if _, err := io.Copy(w, b); err == nil {
 		return true
@@ -157,13 +168,9 @@ func (c *Cache) Close() {
 	c.cache.close()
 }
 
-// memory
-// expiration
-// make sure reader is closed everywhere
-// overload handling: reader priority, writer priority, writer block
-// refactor tests
 // keyspaces
-// verify no memory leak
+// verify no memory leak, whether all objects outside drop the internal references after closed
 // max procs
+// refactor tests with documentation
 
 // once possible, make an http comparison

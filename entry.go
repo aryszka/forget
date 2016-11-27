@@ -1,22 +1,27 @@
 package forget
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 type entry struct {
 	hash                      uint64
 	keySize                   int
-	segmentPosition           int
+	expires                   time.Time
+	segmentPosition, reading  int
 	firstSegment, lastSegment node
-	discarded, writeComplete  bool
-	dataCond                  *sync.Cond
+	writeComplete, discarded  bool
+	writeCond                 *sync.Cond
 	prevEntry, nextEntry      node
 }
 
-func newEntry(hash uint64, keySize int) *entry {
+func newEntry(hash uint64, keySize int, ttl time.Duration) *entry {
 	return &entry{
-		hash:     hash,
-		keySize:  keySize,
-		dataCond: sync.NewCond(&sync.Mutex{}),
+		hash:      hash,
+		keySize:   keySize,
+		expires:   time.Now().Add(ttl),
+		writeCond: sync.NewCond(&sync.Mutex{}),
 	}
 }
 
@@ -25,14 +30,26 @@ func (e *entry) next() node     { return e.nextEntry }
 func (e *entry) setPrev(p node) { e.prevEntry = p }
 func (e *entry) setNext(n node) { e.nextEntry = n }
 
-func (e *entry) waitData() {
-	e.dataCond.L.Lock()
-	e.dataCond.Wait()
-	e.dataCond.L.Unlock()
+func (e *entry) expired() bool {
+	return e.expires.Before(time.Now())
 }
 
-func (e *entry) broadcastData() {
-	e.dataCond.Broadcast()
+func (e *entry) waitWrite() {
+	e.writeCond.L.Lock()
+	e.writeCond.Wait()
+	e.writeCond.L.Unlock()
+}
+
+func (e *entry) incReading() {
+	e.reading++
+}
+
+func (e *entry) decReading() {
+	e.reading--
+}
+
+func (e *entry) broadcastWrite() {
+	e.writeCond.Broadcast()
 }
 
 func (e *entry) data() (*segment, *segment) {

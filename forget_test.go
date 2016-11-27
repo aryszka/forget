@@ -129,7 +129,7 @@ func newTestCache() *Cache {
 func initTestCache(init map[string][]byte) *Cache {
 	c := newTestCache()
 	for k, v := range init {
-		if !c.SetBytes(k, v) {
+		if !c.SetBytes(k, v, time.Hour) {
 			panic("failed to initialize test cache")
 		}
 	}
@@ -217,7 +217,7 @@ func TestSet(t *testing.T) {
 			c := initTestCache(ti.init)
 			defer c.Close()
 
-			w, ok := c.Set(ti.key)
+			w, ok := c.Set(ti.key, time.Hour)
 			if !ok {
 				t.Error("failed to set item")
 				return
@@ -244,7 +244,7 @@ func TestSetKey(t *testing.T) {
 			c := initTestCache(ti.init)
 			defer c.Close()
 
-			if !c.SetKey(ti.key) {
+			if !c.SetKey(ti.key, time.Hour) {
 				t.Error("failed to set key")
 				return
 			}
@@ -260,7 +260,7 @@ func TestSetBytesFails(t *testing.T) {
 	c := New(Options{MaxSize: 6, SegmentSize: 3})
 	defer c.Close()
 
-	if c.SetBytes("foo", []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}) {
+	if c.SetBytes("foo", []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}, time.Hour) {
 		t.Error("failed to fail")
 	}
 }
@@ -271,7 +271,7 @@ func TestSetBytes(t *testing.T) {
 			c := initTestCache(ti.init)
 			defer c.Close()
 
-			if !c.SetBytes(ti.key, ti.data) {
+			if !c.SetBytes(ti.key, ti.data, time.Hour) {
 				t.Error("failed to set the item")
 				return
 			}
@@ -301,7 +301,7 @@ func TestClose(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	c.SetBytes("foo", []byte{1, 2, 3})
+	c.SetBytes("foo", []byte{1, 2, 3}, time.Hour)
 
 	c.Close()
 
@@ -318,7 +318,7 @@ func TestClose(t *testing.T) {
 			}
 		}()
 
-		c.SetBytes("bar", []byte{2, 3, 1})
+		c.SetBytes("bar", []byte{2, 3, 1}, time.Hour)
 		if c.GetKey("bar") {
 			t.Error("failed to close cache")
 			return
@@ -333,7 +333,7 @@ func TestReadZero(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	if !c.SetBytes("foo", []byte{1, 2, 3}) {
+	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
 		t.Error("failed to set bytes")
 		return
 	}
@@ -355,7 +355,7 @@ func TestWriteZero(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -372,7 +372,7 @@ func TestWaitForData(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -411,11 +411,11 @@ func TestWaitForData(t *testing.T) {
 	wg.Wait()
 }
 
-func TestReadFromDeletedEntry(t *testing.T) {
+func TestEntryReadIsNotDeleted(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	if !c.SetBytes("foo", []byte{1, 2, 3}) {
+	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
 		t.Error("failed to set item")
 		return
 	}
@@ -431,8 +431,8 @@ func TestReadFromDeletedEntry(t *testing.T) {
 	c.Del("foo")
 
 	p := make([]byte, 3)
-	if _, err := r.Read(p); err != ErrItemDiscarded {
-		t.Error("failed to get discarded error", err)
+	if n, err := r.Read(p); n != 3 || err != nil {
+		t.Error("failed to prevent deletion of entry being read", n, p, err)
 	}
 }
 
@@ -440,7 +440,7 @@ func TestWriteToDeletedEntry(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -465,7 +465,7 @@ func TestWriteToCompleteEntry(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -493,7 +493,7 @@ func TestCloseWriteTwice(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -521,12 +521,12 @@ func TestEvict(t *testing.T) {
 	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
-	if !c.SetBytes("foo", []byte{1, 2, 3}) {
+	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
 		t.Error("failed to set item")
 		return
 	}
 
-	if !c.SetBytes("bar", []byte{4, 5, 6, 1, 2, 3}) {
+	if !c.SetBytes("bar", []byte{4, 5, 6, 1, 2, 3}, time.Hour) {
 		t.Error("failed to set item")
 		return
 	}
@@ -546,12 +546,12 @@ func TestDoNotEvictCurrent(t *testing.T) {
 	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
-	if !c.SetBytes("foo", []byte{1, 2, 3}) {
+	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
 		t.Error("failed to set item")
 		return
 	}
 
-	w, ok := c.Set("bar")
+	w, ok := c.Set("bar", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -559,7 +559,7 @@ func TestDoNotEvictCurrent(t *testing.T) {
 
 	defer w.Close()
 
-	if !c.SetBytes("baz", []byte{4, 5, 6}) {
+	if !c.SetBytes("baz", []byte{4, 5, 6}, time.Hour) {
 		t.Error("failed to set item")
 		return
 	}
@@ -593,12 +593,12 @@ func TestFailToEvict(t *testing.T) {
 	c := New(Options{MaxSize: 6, SegmentSize: 3})
 	defer c.Close()
 
-	if !c.SetBytes("foo", []byte{1, 2, 3}) {
+	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
 		t.Error("failed to set initial item")
 		return
 	}
 
-	w, ok := c.Set("bar")
+	w, ok := c.Set("bar", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -616,7 +616,7 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -661,7 +661,7 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 
 func TestWriteAfterCacheClosed(t *testing.T) {
 	c := New(Options{MaxSize: 12, SegmentSize: 6})
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -678,7 +678,7 @@ func TestWriteAfterCacheClosed(t *testing.T) {
 func TestKeyTooLarge(t *testing.T) {
 	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
-	if _, ok := c.Set("123456789012345"); ok {
+	if _, ok := c.Set("123456789012345", time.Hour); ok {
 		t.Error("too large key was set")
 	}
 
@@ -691,7 +691,7 @@ func TestWriteAtSegmentBoundary(t *testing.T) {
 	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to create item")
 		return
@@ -723,7 +723,7 @@ func TestWriteToItemWithEmptyKey(t *testing.T) {
 	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
-	w, ok := c.Set("")
+	w, ok := c.Set("", time.Hour)
 	if !ok {
 		t.Error("failed to create item")
 		return
@@ -748,7 +748,7 @@ func TestAllocateAndInsert(t *testing.T) {
 	c := New(Options{MaxSize: 24, SegmentSize: 6})
 	defer c.Close()
 
-	w, ok := c.Set("foo")
+	w, ok := c.Set("foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
 		return
@@ -756,7 +756,7 @@ func TestAllocateAndInsert(t *testing.T) {
 
 	defer w.Close()
 
-	if !c.SetKey("bar") {
+	if !c.SetKey("bar", time.Hour) {
 		t.Error("failed to set key")
 		return
 	}
@@ -770,7 +770,7 @@ func TestGetEmptyItem(t *testing.T) {
 	c := New(Options{MaxSize: 12, SegmentSize: 6})
 	defer c.Close()
 
-	if !c.SetKey("") {
+	if !c.SetKey("", time.Hour) {
 		t.Error("failed to set item with empty key")
 	}
 
@@ -781,10 +781,122 @@ func TestGetEmptyItem(t *testing.T) {
 
 func TestItemsWithDifferentKeys(t *testing.T) {
 	c := New(Options{MaxSize: 24, SegmentSize: 6})
-	c.SetKey("1")
-	c.SetKey("123")
-	c.SetKey("123456789")
+	c.SetKey("1", time.Hour)
+	c.SetKey("123", time.Hour)
+	c.SetKey("123456789", time.Hour)
 	if !c.GetKey("1") || !c.GetKey("123") || !c.GetKey("123456789") {
 		t.Error("failed to get/set keys of different size")
 	}
+}
+
+func TestExpiration(t *testing.T) {
+	c := New(Options{MaxSize: 24, SegmentSize: 6})
+	defer c.Close()
+
+	if !c.SetKey("foo", 3*time.Millisecond) {
+		t.Error("failed to set item")
+		return
+	}
+
+	time.Sleep(12 * time.Millisecond)
+	if c.GetKey("foo") {
+		t.Error("failed to expire item")
+	}
+}
+
+func TestDoNotEvictWhenReading(t *testing.T) {
+	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	defer c.Close()
+
+	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
+		t.Error("failed to set initial item")
+		return
+	}
+
+	r, ok := c.Get("foo")
+	if !ok {
+		t.Error("failed to retrieve initial item")
+		return
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		c.SetBytes("bar", []byte{4, 5, 6}, time.Hour)
+		wg.Done()
+	}()
+	go func() {
+		c.SetBytes("baz", []byte{7, 8, 9}, time.Hour)
+		wg.Done()
+	}()
+
+	time.Sleep(12 * time.Millisecond)
+
+	if err := r.Close(); err != nil {
+		t.Error(err)
+	}
+
+	wg.Wait()
+}
+
+func TestTooLargeKey(t *testing.T) {
+	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	defer c.Close()
+
+	if c.SetKey("123456789", time.Hour) {
+		t.Error("unexpectedly set too large key")
+	}
+}
+
+func TestReadFromClosedCache(t *testing.T) {
+	c := New(Options{MaxSize: 24, SegmentSize: 6})
+	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
+		t.Error("failed to set item")
+		return
+	}
+
+	r, ok := c.Get("foo")
+	if !ok {
+		t.Error("failed to retrieve item")
+		return
+	}
+
+	c.Close()
+
+	p := make([]byte, 3)
+	if _, err := r.Read(p); err != ErrItemDiscarded {
+		t.Error("failed to fail", err)
+	}
+}
+
+func TestBlockWriterUntilSpaceAvailable(t *testing.T) {
+	c := New(Options{MaxSize: 9, SegmentSize: 3})
+	defer c.Close()
+
+	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
+		t.Error("failed to set item")
+		return
+	}
+
+	r, ok := c.Get("foo")
+	if !ok {
+		t.Error("failed to retrieve item")
+		return
+	}
+
+	w, ok := c.Set("bar", time.Hour)
+	done := make(chan struct{})
+	go func() {
+		if n, err := w.Write([]byte{1, 2, 3}); n != 3 || err != nil {
+			t.Error("failed to write after unblocked")
+		}
+
+		w.Close()
+		close(done)
+	}()
+
+	time.Sleep(12 * time.Millisecond)
+
+	r.Close()
+	<-done
 }

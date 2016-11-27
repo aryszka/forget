@@ -11,13 +11,15 @@ const (
 )
 
 var (
-	testKeys []string
-	testData [][]byte
+	testKeys          []string
+	testData          [][]byte
+	randomInitialized bool
 )
 
-func init() {
+func initRandom() {
 	testKeys = randomStrings(testKeyCount, minKeyLength, maxKeyLength)
 	testData = randomByteSlices(testKeyCount, minDataLength, maxDataLength)
+	randomInitialized = true
 }
 
 func randomBytes(min, max int) []byte {
