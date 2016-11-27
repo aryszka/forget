@@ -26,7 +26,7 @@ mem:
 	go tool pprof -top mem.out # Run 'make bench' to generate profile.
 
 gencover: build
-	go test -test.short -coverprofile cover.out
+	go test -coverprofile cover.out
 
 cover: gencover
 	go tool cover -func cover.out

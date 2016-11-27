@@ -17,8 +17,8 @@ const (
 )
 
 type cacheIFace interface {
-	Get(string) (io.ReadCloser, bool)
-	Set(string, time.Duration) (io.WriteCloser, bool)
+	Get(string, string) (io.ReadCloser, bool)
+	Set(string, string, time.Duration) (io.WriteCloser, bool)
 	Close()
 }
 
@@ -36,12 +36,12 @@ func newBaselineMap(o Options) cacheIFace {
 	return make(baselineMap)
 }
 
-func (m baselineMap) Get(key string) (io.ReadCloser, bool) {
+func (m baselineMap) Get(_, key string) (io.ReadCloser, bool) {
 	b, ok := m[key]
 	return b, ok
 }
 
-func (m baselineMap) Set(key string, _ time.Duration) (io.WriteCloser, bool) {
+func (m baselineMap) Set(_, key string, _ time.Duration) (io.WriteCloser, bool) {
 	b := &buffer{buf: bytes.NewBuffer(nil)}
 	m[key] = b
 	return b, true
@@ -56,7 +56,7 @@ func createCache(parallel, itemCount int, o Options, create func(Options) cacheI
 	for i := 0; i < len(c); i++ {
 		c[i] = create(o)
 		for j := 0; j < itemCount; j++ {
-			w, ok := c[i].Set(randomKey(), time.Hour)
+			w, ok := c[i].Set("", randomKey(), time.Hour)
 			if !ok {
 				panic("failed to set test data")
 			}
@@ -126,11 +126,11 @@ func executeKey(execute func(cacheIFace, string)) func([]cacheIFace) {
 }
 
 func executeGet(c cacheIFace, key string) {
-	c.Get(key)
+	c.Get("", key)
 }
 
 func executeSet(c cacheIFace, key string) {
-	c.Set(key, time.Hour)
+	c.Set("", key, time.Hour)
 }
 
 func newForget(o Options) cacheIFace { return New(o) }

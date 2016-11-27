@@ -7,8 +7,8 @@ import (
 
 // temporary structure to pass the key and its hash around during individual calls
 type id struct {
-	hash uint64
-	key  string
+	hash          uint64
+	keyspace, key string
 }
 
 type cache struct {
@@ -91,9 +91,9 @@ func (c *cache) writeKey(e *entry, key string) error {
 }
 
 func (c *cache) lookup(id id) (*entry, bool) {
-	for _, ei := range c.hash[c.index(id.hash)] {
-		if ei.keyEquals(id.key) {
-			return ei, true
+	for _, e := range c.hash[c.index(id.hash)] {
+		if e.keyspace == id.keyspace && e.keyEquals(id.key) {
+			return e, true
 		}
 	}
 
@@ -173,7 +173,7 @@ func (c *cache) set(id id, ttl time.Duration) (*entry, error) {
 	}
 
 	c.del(id)
-	e := newEntry(id.hash, len(id.key), ttl)
+	e := newEntry(id.hash, id.keyspace, len(id.key), ttl)
 
 	if err := c.writeKey(e, id.key); err != nil {
 		return nil, err

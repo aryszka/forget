@@ -7,6 +7,7 @@ import (
 
 type entry struct {
 	hash                      uint64
+	keyspace                  string
 	keySize                   int
 	expires                   time.Time
 	segmentPosition, reading  int
@@ -16,9 +17,10 @@ type entry struct {
 	prevEntry, nextEntry      node
 }
 
-func newEntry(hash uint64, keySize int, ttl time.Duration) *entry {
+func newEntry(hash uint64, keyspace string, keySize int, ttl time.Duration) *entry {
 	return &entry{
 		hash:      hash,
+		keyspace:  keyspace,
 		keySize:   keySize,
 		expires:   time.Now().Add(ttl),
 		writeCond: sync.NewCond(&sync.Mutex{}),
