@@ -1283,3 +1283,34 @@ func TestUseMaxProcsDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestCloseReader(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+
+	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
+		t.Error("failed to set item")
+		return
+	}
+
+	r, ok := c.Get("s1", "foo")
+	if !ok {
+		t.Error("failed to retrieve reader")
+		return
+	}
+
+	if err := r.Close(); err != nil {
+		t.Error("failed to close reader", err)
+		return
+	}
+
+	if _, err := r.Read(make([]byte, 3)); err != ErrReaderClosed {
+		t.Error("failed to return the right error", err)
+		return
+	}
+
+	if err := r.Close(); err != ErrReaderClosed {
+		t.Error("failed to return the right error", err)
+		return
+	}
+}

@@ -88,7 +88,7 @@ func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 	defer ci.mx.Unlock()
 
 	if e, ok := ci.get(id{hash: h, keyspace: keyspace, key: key}); ok {
-		return newReader(ci.mx, ci.readCond, e, c.options.SegmentSize), true
+		return newReader(ci, e, c.options.SegmentSize), true
 	}
 
 	return nil, false
@@ -118,7 +118,7 @@ func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 
 	b := bytes.NewBuffer(nil)
 	_, err := c.copy(b, r)
-	return b.Bytes(), err == nil // TODO: which errors can happen here
+	return b.Bytes(), err == nil
 }
 
 func setItem(c *cache, id id, ttl time.Duration) (*entry, error) {
@@ -131,16 +131,16 @@ func setItem(c *cache, id id, ttl time.Duration) (*entry, error) {
 // The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
 // reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
 func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
-	h := c.hash(key)
-	ci := c.getCache(h)
-
 	if len(key) > c.maxItemSize {
 		return nil, false
 	}
 
+	h := c.hash(key)
+	ci := c.getCache(h)
 	id := id{hash: h, keyspace: keyspace, key: key}
+
 	for {
-		if e, err := setItem(ci, id, ttl); err == errAllocationForKeyFailed {
+		if e, err := setItem(ci, id, ttl); err == errAllocationFailed {
 			ci.readCond.L.Lock()
 			ci.readCond.Wait()
 			ci.readCond.L.Unlock()
@@ -180,7 +180,6 @@ func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) b
 func (c *Cache) Del(keyspace, key string) {
 	h := c.hash(key)
 	ci := c.getCache(h)
-
 	id := id{hash: h, keyspace: keyspace, key: key}
 
 	ci.mx.Lock()
@@ -188,7 +187,7 @@ func (c *Cache) Del(keyspace, key string) {
 	ci.del(id)
 }
 
-// Close shuts down the cache and releases resource.
+// Close shuts down the cache and releases resources.
 func (c *Cache) Close() {
 	for _, ci := range c.cache {
 		func() {

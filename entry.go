@@ -36,24 +36,6 @@ func (e *entry) expired() bool {
 	return e.expires.Before(time.Now())
 }
 
-func (e *entry) waitWrite() {
-	e.writeCond.L.Lock()
-	e.writeCond.Wait()
-	e.writeCond.L.Unlock()
-}
-
-func (e *entry) incReading() {
-	e.reading++
-}
-
-func (e *entry) decReading() {
-	e.reading--
-}
-
-func (e *entry) broadcastWrite() {
-	e.writeCond.Broadcast()
-}
-
 func (e *entry) data() (*segment, *segment) {
 	if e.firstSegment == nil {
 		return nil, nil
@@ -104,13 +86,20 @@ func (e *entry) write(p []byte) (int, error) {
 	return n, nil
 }
 
-func (e *entry) closeWrite() error {
-	e.writeComplete = true
-	return nil
+func (e *entry) waitWrite() {
+	e.writeCond.L.Lock()
+	e.writeCond.Wait()
+	e.writeCond.L.Unlock()
+}
+
+func (e *entry) broadcastWrite() {
+	e.writeCond.Broadcast()
 }
 
 func (e *entry) close() {
 	e.discarded = true
 	e.firstSegment = nil
 	e.lastSegment = nil
+	e.prevEntry = nil
+	e.nextEntry = nil
 }

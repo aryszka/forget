@@ -31,8 +31,7 @@ func (s *segment) equals(offset int, p []byte) (bool, int) {
 }
 
 func (s *segment) read(offset int, p []byte) int {
-	n := copy(p, s.data[offset:])
-	return n
+	return copy(p, s.data[offset:])
 }
 
 func (s *segment) write(offset int, p []byte) int {
@@ -40,7 +39,7 @@ func (s *segment) write(offset int, p []byte) int {
 }
 
 func newMemory(segmentCount, segmentSize int) *memory {
-	m := &memory{segments: &list{}}
+	m := &memory{segments: new(list)}
 	for i := 0; i < segmentCount; i++ {
 		m.segments.insert(newSegment(segmentSize), nil)
 	}

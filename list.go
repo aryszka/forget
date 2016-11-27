@@ -54,3 +54,4 @@ func (l *list) removeRange(first, last node) {
 
 func (l *list) insert(n, before node) { l.insertRange(n, n, before) }
 func (l *list) remove(n node)         { l.removeRange(n, n) }
+func (l *list) empty() bool           { return l.first == nil }

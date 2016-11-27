@@ -13,9 +13,8 @@ type rwLocker interface {
 }
 
 type cio struct {
-	mx       rwLocker
-	readCond *sync.Cond
-	entry    *entry
+	cache *cache
+	entry *entry
 }
 
 type reader struct {
@@ -26,8 +25,7 @@ type reader struct {
 
 type writer struct {
 	*cio
-	cache *cache
-	size  int
+	max, size int
 }
 
 var (
@@ -38,29 +36,29 @@ var (
 	// ErrWriteLimit is returned when writing to an item fills the available size.
 	ErrWriteLimit = errors.New("write limit")
 
+	// ErrReaderClosed is returned when reading from or closing a reader that was already closed before.
+	ErrReaderClosed = errors.New("writer closed")
+
 	// ErrWriterClosed is returned when writing to or closing a writer that was already closed before.
 	ErrWriterClosed = errors.New("writer closed")
 )
 
-func newReader(mx rwLocker, readCond *sync.Cond, e *entry, segmentSize int) *reader {
+func newReader(c *cache, e *entry, segmentSize int) *reader {
 	return &reader{
-		cio:             &cio{mx: mx, readCond: readCond, entry: e},
+		cio:             &cio{cache: c, entry: e},
 		segmentSize:     segmentSize,
 		currentSegment:  e.firstSegment,
 		segmentPosition: e.keySize,
 	}
 }
 
-func newWriter(c *cache, e *entry) *writer {
-	return &writer{
-		cio:   &cio{mx: c.mx, readCond: c.readCond, entry: e},
-		cache: c,
-	}
-}
-
 func (r *reader) readOne(p []byte) (int, error) {
-	r.mx.RLock()
-	defer r.mx.RUnlock()
+	r.cache.mx.RLock()
+	defer r.cache.mx.RUnlock()
+
+	if r.entry == nil {
+		return 0, ErrReaderClosed
+	}
 
 	if r.entry.discarded {
 		return 0, ErrItemDiscarded
@@ -109,66 +107,67 @@ func (r *reader) Read(p []byte) (int, error) {
 }
 
 func (r *reader) Close() error {
-	r.mx.Lock()
-	defer r.readCond.Broadcast()
-	defer r.mx.Unlock()
+	r.cache.mx.Lock()
+	defer r.cache.broadcastRead()
+	defer r.cache.mx.Unlock()
 
-	r.mx = nil
-	r.readCond = nil
-	r.entry.decReading()
+	if r.entry == nil {
+		return ErrReaderClosed
+	}
+
+	r.entry.reading--
 	r.entry = nil
 	r.currentSegment = nil
 	return nil
 }
 
-func (w *writer) writeOne(p []byte) (int, bool, error) {
-	w.mx.Lock()
-	defer w.entry.broadcastWrite()
-	defer w.mx.Unlock()
-
-	n, err := w.entry.write(p)
-
-	var allocationFailed bool
-	if n < len(p) && err == nil {
-		allocationFailed = !w.cache.allocateFor(w.entry)
+func newWriter(c *cache, e *entry) *writer {
+	return &writer{
+		cio: &cio{cache: c, entry: e},
+		max: c.segmentCount*c.segmentSize - e.keySize,
 	}
-
-	return n, allocationFailed, err
 }
 
-func (w *writer) waitReadCond() {
-	w.readCond.L.Lock()
-	w.readCond.Wait()
-	w.readCond.L.Unlock()
-}
+func (w *writer) writeOne(p []byte) (int, error) {
+	w.cache.mx.Lock()
+	defer w.entry.broadcastWrite()
+	defer w.cache.mx.Unlock()
 
-func (w *writer) Write(p []byte) (int, error) {
-	if w.entry == nil {
+	if w.entry.writeComplete {
 		return 0, ErrWriterClosed
 	}
 
+	n, err := w.entry.write(p)
+	if n == len(p) || err != nil {
+		return n, err
+	}
+
+	err = w.cache.allocateFor(w.entry)
+	return n, err
+}
+
+func (w *writer) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 
-	max := w.cache.segmentCount*w.cache.segmentSize - w.entry.keySize
 	var count int
 	for len(p) > 0 {
-		n, allocationFailed, err := w.writeOne(p)
+		n, err := w.writeOne(p)
 		p = p[n:]
 		count += n
 		w.size += n
 
-		if err != nil {
+		if err != nil && err != errAllocationFailed {
 			return count, err
 		}
 
-		if len(p) > 0 && w.size == max {
+		if len(p) > 0 && w.size == w.max {
 			return count, ErrWriteLimit
 		}
 
-		if allocationFailed {
-			w.waitReadCond()
+		if err == errAllocationFailed {
+			w.cache.waitRead()
 		}
 	}
 
@@ -176,18 +175,14 @@ func (w *writer) Write(p []byte) (int, error) {
 }
 
 func (w *writer) Close() error {
-	if w.entry == nil {
+	w.cache.mx.Lock()
+	defer w.entry.broadcastWrite()
+	defer w.cache.mx.Unlock()
+
+	if w.entry.writeComplete {
 		return ErrWriterClosed
 	}
 
-	w.mx.Lock()
-	defer w.entry.broadcastWrite()
-	defer w.mx.Unlock()
-
-	w.mx = nil
-	w.readCond = nil
-	err := w.entry.closeWrite()
-	w.entry = nil
-	w.cache = nil
-	return err
+	w.entry.writeComplete = true
+	return nil
 }
