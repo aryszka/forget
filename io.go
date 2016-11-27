@@ -56,72 +56,54 @@ func newWriter(mx rwLocker, c *cache, e *entry) *writer {
 	}
 }
 
+func (r *reader) readOne(p []byte) (int, error) {
+	r.mx.RLock()
+	defer r.mx.RUnlock()
+
+	if r.entry.discarded {
+		return 0, ErrItemDiscarded
+	}
+
+	if r.currentSegment != r.entry.lastSegment && r.segmentPosition == r.segmentSize {
+		r.currentSegment = r.currentSegment.next()
+		r.segmentPosition = 0
+	}
+
+	if r.currentSegment == r.entry.lastSegment &&
+		r.segmentPosition+len(p) > r.entry.segmentPosition {
+
+		p = p[:r.entry.segmentPosition-r.segmentPosition]
+		if len(p) == 0 {
+			if r.entry.writeComplete {
+				return 0, io.EOF
+			}
+
+			return 0, nil
+		}
+	}
+
+	n := r.currentSegment.(*segment).read(r.segmentPosition, p)
+	r.segmentPosition += n
+	return n, nil
+}
+
 func (r *reader) Read(p []byte) (int, error) {
 	var count int
-	for {
-		r.mx.RLock()
-
-		if r.entry.discarded {
-			r.mx.RUnlock()
-			return count, ErrItemDiscarded
-		}
-
-		if r.currentSegment == r.entry.lastSegment && len(p) > r.entry.segmentPosition {
-			max := r.entry.segmentPosition - r.segmentPosition
-			if max == 0 {
-				if r.entry.writeComplete {
-					r.mx.RUnlock()
-					return 0, io.EOF
-				}
-
-				r.mx.RUnlock()
-				r.entry.waitData()
-				continue
-			}
-
-			p = p[:max]
-		}
-
-		if len(p) == 0 {
-			r.mx.RUnlock()
-			return count, nil
-		}
-
-		if r.currentSegment == nil ||
-			r.currentSegment == r.entry.lastSegment &&
-				r.segmentPosition == r.entry.segmentPosition {
-
-			if r.entry.writeComplete {
-				r.mx.RUnlock()
-				return count, io.EOF
-			}
-
-			if count > 0 {
-				r.mx.RUnlock()
-				return count, nil
-			}
-
-			r.mx.RUnlock()
-			r.entry.waitData()
-			continue
-		}
-
-		n := r.currentSegment.(*segment).read(r.segmentPosition, p)
+	for len(p) > 0 {
+		n, err := r.readOne(p)
 		p = p[n:]
 		count += n
-		r.segmentPosition += n
 
-		if r.segmentPosition == r.segmentSize {
-			if r.currentSegment == r.entry.lastSegment {
-				r.currentSegment = nil
-			} else {
-				r.currentSegment = r.currentSegment.next()
-				r.segmentPosition = 0
-			}
+		if err != nil || n == 0 && count > 0 {
+			return count, err
 		}
 
-		r.mx.RUnlock()
+		if n == 0 {
+			r.entry.waitData()
+		}
 	}
+
+	return count, nil
 }
 
 func (r *reader) Close() error {
