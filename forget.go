@@ -25,8 +25,9 @@ type Options struct {
 // Cache provides an in-memory cache for arbitrary binary data
 // identified by keyspace and key. All methods of Cache are thread safe.
 type Cache struct {
-	cache   []*cache
-	hashing func() hash.Hash64
+	options     Options
+	maxItemSize int
+	cache       []*cache
 }
 
 // SingleSpace is equivalent to Cache but it doesn't use keyspaces.
@@ -44,20 +45,23 @@ func New(o Options) *Cache {
 		o.maxProcs = runtime.GOMAXPROCS(-1)
 	}
 
-	o.MaxSize /= o.maxProcs
+	maxItemSize := o.MaxSize / o.maxProcs
+	maxItemSize -= maxItemSize % o.SegmentSize
+
 	c := make([]*cache, o.maxProcs)
 	for i := range c {
-		c[i] = newCache(o.MaxSize/o.SegmentSize, o.SegmentSize)
+		c[i] = newCache(maxItemSize/o.SegmentSize, o.SegmentSize)
 	}
 
 	return &Cache{
-		cache:   c,
-		hashing: o.hashing,
+		options:     o,
+		maxItemSize: maxItemSize,
+		cache:       c,
 	}
 }
 
 func (c *Cache) hash(key string) uint64 {
-	h := c.hashing()
+	h := c.options.hashing()
 	h.Write([]byte(key))
 	return h.Sum64()
 }
@@ -65,6 +69,10 @@ func (c *Cache) hash(key string) uint64 {
 func (c *Cache) getCache(hash uint64) *cache {
 	// TODO: >> 32 for the fnv last byte thing, but not sure about it, needs testing of distribution
 	return c.cache[int(hash>>32)%len(c.cache)]
+}
+
+func (c *Cache) copy(to io.Writer, from io.Reader) (int64, error) {
+	return io.CopyBuffer(to, from, make([]byte, c.options.SegmentSize))
 }
 
 // Get retrieves a reader to an item in the cache. The second return argument indicates if the item was
@@ -80,7 +88,7 @@ func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 	defer ci.mx.Unlock()
 
 	if e, ok := ci.get(id{hash: h, keyspace: keyspace, key: key}); ok {
-		return newReader(ci.mx, ci.readCond, e, ci.segmentSize), true
+		return newReader(ci.mx, ci.readCond, e, c.options.SegmentSize), true
 	}
 
 	return nil, false
@@ -109,7 +117,7 @@ func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 	defer r.Close()
 
 	b := bytes.NewBuffer(nil)
-	_, err := io.Copy(b, r)
+	_, err := c.copy(b, r)
 	return b.Bytes(), err == nil // TODO: which errors can happen here
 }
 
@@ -126,7 +134,7 @@ func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bo
 	h := c.hash(key)
 	ci := c.getCache(h)
 
-	if len(key) > ci.segmentCount*ci.segmentSize {
+	if len(key) > c.maxItemSize {
 		return nil, false
 	}
 
@@ -164,7 +172,7 @@ func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) b
 	defer w.Close()
 
 	b := bytes.NewBuffer(data)
-	_, err := io.Copy(w, b)
+	_, err := c.copy(w, b)
 	return err == nil
 }
 
@@ -235,10 +243,8 @@ func (s *SingleSpace) Del(key string) {
 // Close shuts down the cache and releases resource.
 func (s *SingleSpace) Close() { s.cache.Close() }
 
-// max procs
-// copy by segment size
 // status, notifications
-// refactor tests with documentation, examples
+// refactor tests with documentation, examples, more stochastic io tests (buffer sizes, segment borders)
 // fuzzy testing
 
 // once possible, make an http comparison
