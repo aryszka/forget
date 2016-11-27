@@ -43,6 +43,8 @@ func (c *cache) allocateFor(e *entry) bool {
 	for {
 		if s, ok := c.memory.allocate(); ok {
 			if last != nil {
+			}
+			if last != nil && s != last.next() {
 				c.memory.move(s, last.next())
 			}
 
@@ -71,6 +73,8 @@ func (c *cache) writeKey(e *entry, key string) bool {
 }
 
 func (c *cache) lookup(id id) (*entry, bool) {
+	// optimization possiblity: if there is only a single entry in the bucket,
+	// no need to compare the key
 	for _, ei := range c.hash[id.hash%uint64(c.segmentCount)] {
 		k := ei.readKey()
 		if k == id.key {
@@ -101,7 +105,7 @@ func (c *cache) deleteLookup(e *entry) {
 
 func (c *cache) touchEntry(e *entry) {
 	c.lru.remove(e)
-	c.lru.append(e)
+	c.lru.insert(e, nil)
 }
 
 func (c *cache) deleteEntry(e *entry) {
@@ -135,13 +139,13 @@ func (c *cache) set(id id) (*entry, bool) {
 	}
 
 	c.del(id)
-	e := newEntry(id.hash, len(id.key), c.segmentSize)
+	e := newEntry(id.hash, len(id.key))
 
 	if !c.writeKey(e, id.key) {
 		return nil, false
 	}
 
-	c.lru.append(e)
+	c.lru.insert(e, nil)
 	c.addLookup(id, e)
 
 	return e, true

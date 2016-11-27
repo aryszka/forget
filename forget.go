@@ -59,7 +59,7 @@ func (c *Cache) Get(key string) (io.ReadCloser, bool) {
 	defer c.mx.Unlock()
 
 	if e, ok := c.cache.get(id{hash: h, key: key}); ok {
-		return newReader(c.mx, e), true
+		return newReader(c.mx, e, c.cache.segmentSize), true
 	}
 
 	return nil, false
@@ -73,6 +73,8 @@ func (c *Cache) GetKey(key string) bool {
 
 // GetBytes retrieves an item from the cache with a key. If found, the second
 // return argument will be true, otherwise false.
+//
+// Equivalent to get and copy to end, so it blocks until write finished.
 func (c *Cache) GetBytes(key string) ([]byte, bool) {
 	r, ok := c.Get(key)
 	if !ok {

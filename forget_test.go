@@ -584,7 +584,7 @@ func TestDoNotEvictCurrent(t *testing.T) {
 	}
 
 	if d, ok := c.GetBytes("bar"); !ok || !bytes.Equal(d, []byte{7, 8, 9, 0, 1, 2}) {
-		t.Error("failed to write item")
+		t.Error("data check failed", d)
 		return
 	}
 }
@@ -594,7 +594,7 @@ func TestFailToEvict(t *testing.T) {
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}) {
-		t.Error("failed to set item")
+		t.Error("failed to set initial item")
 		return
 	}
 
@@ -606,7 +606,7 @@ func TestFailToEvict(t *testing.T) {
 
 	defer w.Close()
 
-	if n, err := w.Write([]byte{7, 8, 9, 0, 1, 2, 3, 4, 6}); n != 6 || err != ErrWriteLimit {
+	if n, err := w.Write([]byte{7, 8, 9, 0, 1, 2, 3, 4, 6}); n != 3 || err != ErrWriteLimit {
 		t.Error("failed to report write failure", n, err)
 		return
 	}
@@ -697,7 +697,6 @@ func TestWriteAtSegmentBoundary(t *testing.T) {
 		return
 	}
 
-	// currently it should block at GetBytes()
 	defer w.Close()
 
 	if n, err := w.Write([]byte{1, 2, 3}); n != 3 || err != nil {
@@ -707,6 +706,11 @@ func TestWriteAtSegmentBoundary(t *testing.T) {
 
 	if n, err := w.Write([]byte{4, 5, 6}); n != 3 || err != nil {
 		t.Error("failed to write to item", n, err)
+		return
+	}
+
+	if err := w.Close(); err != nil {
+		t.Error(err)
 		return
 	}
 
@@ -725,15 +729,52 @@ func TestWriteToItemWithEmptyKey(t *testing.T) {
 		return
 	}
 
-	// currently it should block at GetBytes()
-	defer w.Close()
-
 	if n, err := w.Write([]byte{1, 2, 3}); n != 3 || err != nil {
 		t.Error("failed to write to item", n, err)
 		return
 	}
 
-	if b, ok := c.GetBytes("foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+	if err := w.Close(); err != nil {
+		t.Error(err)
+		return
+	}
+
+	if b, ok := c.GetBytes(""); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
 		t.Error("failed to read item", ok, b)
+	}
+}
+
+func TestAllocateAndInsert(t *testing.T) {
+	c := New(Options{MaxSize: 24, SegmentSize: 6})
+	defer c.Close()
+
+	w, ok := c.Set("foo")
+	if !ok {
+		t.Error("failed to set item")
+		return
+	}
+
+	defer w.Close()
+
+	if !c.SetKey("bar") {
+		t.Error("failed to set key")
+		return
+	}
+
+	if _, err := w.Write([]byte{1, 2, 3, 4, 5, 6}); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestGetEmptyItem(t *testing.T) {
+	c := New(Options{MaxSize: 12, SegmentSize: 6})
+	defer c.Close()
+
+	if !c.SetKey("") {
+		t.Error("failed to set item with empty key")
+	}
+
+	if !c.GetKey("") {
+		t.Error("failed to get item with empty key")
 	}
 }

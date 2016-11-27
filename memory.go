@@ -31,7 +31,7 @@ func (s *segment) write(offset int, p []byte) int {
 func newMemory(segmentCount, segmentSize int) *memory {
 	m := &memory{segments: &list{}}
 	for i := 0; i < segmentCount; i++ {
-		m.segments.append(newSegment(segmentSize))
+		m.segments.insert(newSegment(segmentSize), nil)
 	}
 
 	m.firstFree = m.segments.first

@@ -1,38 +1,23 @@
 package forget
 
-import (
-	"errors"
-	"io"
-	"sync"
-)
+import "sync"
 
 type entry struct {
 	hash                      uint64
 	keySize                   int
-	segmentSize, size         int // better store size here, because there is less entries than segments
+	segmentPosition           int
 	firstSegment, lastSegment node
 	discarded, writeComplete  bool
 	dataCond                  *sync.Cond
 	prevEntry, nextEntry      node
 }
 
-var (
-	// ErrItemDiscarded is returned by IO operations when an item has been discarded, e.g. evicted, deleted or the discarded
-	// due to the cache was closed.
-	ErrItemDiscarded = errors.New("item discarded")
-
-	// // ErrItemWriteComplete is returned by write and close IO operations when an item's write was signalled to
-	// // be complete by a previous call to Close().
-	// ErrItemWriteComplete = errors.New("item write complete")
-)
-
 // entry doesn't hold a lock, but should be accessed in synchronized way
-func newEntry(hash uint64, keySize int, segmentSize int) *entry {
+func newEntry(hash uint64, keySize int) *entry {
 	return &entry{
-		hash:        hash,
-		keySize:     keySize,
-		dataCond:    sync.NewCond(&sync.Mutex{}),
-		segmentSize: segmentSize,
+		hash:     hash,
+		keySize:  keySize,
+		dataCond: sync.NewCond(&sync.Mutex{}),
 	}
 }
 
@@ -65,54 +50,23 @@ func (e *entry) appendSegment(s *segment) {
 	}
 
 	e.lastSegment = s
-}
-
-func moveToPosition(segmentIndex, offset, segmentSize int) int {
-	segmentOffset := offset - segmentIndex*segmentSize
-	if segmentOffset < 0 {
-		segmentOffset = 0
-	}
-
-	return segmentOffset
-}
-
-func (e *entry) readData(offset int, p []byte) (int, error) {
-	if e.discarded {
-		return 0, ErrItemDiscarded // TODO: decide on naming, entry or item
-	}
-
-	if offset >= e.size {
-		if e.writeComplete {
-			return 0, io.EOF
-		}
-
-		return 0, nil
-	}
-
-	if offset+len(p) > e.size {
-		p = p[:e.size-offset]
-	}
-
-	currentSegment, segmentIndex, count := e.firstSegment, 0, 0
-	for len(p) > 0 {
-		segmentOffset := moveToPosition(segmentIndex, offset, e.segmentSize)
-		n := currentSegment.(*segment).read(segmentOffset, p)
-		p = p[n:]
-		count += n
-		currentSegment = currentSegment.next()
-		segmentIndex++
-	}
-
-	return count, nil
-}
-
-func (e *entry) read(offset int, p []byte) (int, error) {
-	return e.readData(offset+e.keySize, p)
+	e.segmentPosition = 0
 }
 
 func (e *entry) readKey() string {
+	if e.firstSegment == nil {
+		return ""
+	}
+
 	k := make([]byte, e.keySize)
-	e.readData(0, k)
+	s := e.firstSegment
+	p := k
+	for len(p) > 0 {
+		n := s.(*segment).read(0, p)
+		p = p[n:]
+		s = s.next()
+	}
+
 	return string(k)
 }
 
@@ -125,8 +79,8 @@ func (e *entry) write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	n := e.lastSegment.(*segment).write(e.size%e.segmentSize, p)
-	e.size += n
+	n := e.lastSegment.(*segment).write(e.segmentPosition, p)
+	e.segmentPosition += n
 
 	return n, nil
 }

@@ -2,17 +2,19 @@ package forget
 
 import (
 	"errors"
+	"io"
 	"sync"
 )
 
 type cio struct {
-	mx     *sync.Mutex
-	entry  *entry
-	offset int
+	mx    *sync.Mutex
+	entry *entry
 }
 
 type reader struct {
 	*cio
+	currentSegment               node
+	segmentSize, segmentPosition int
 }
 
 type writer struct {
@@ -21,6 +23,10 @@ type writer struct {
 }
 
 var (
+	// ErrItemDiscarded is returned by IO operations when an item has been discarded, e.g. evicted, deleted or the discarded
+	// due to the cache was closed.
+	ErrItemDiscarded = errors.New("item discarded")
+
 	// ErrWriteLimit is returned when writing to an item fills the available size.
 	ErrWriteLimit = errors.New("write limit")
 
@@ -28,36 +34,88 @@ var (
 	ErrWriterClosed = errors.New("writer closed")
 )
 
-func newReader(mx *sync.Mutex, e *entry) *reader {
-	return &reader{cio: &cio{mx: mx, entry: e}}
+func newReader(mx *sync.Mutex, e *entry, segmentSize int) *reader {
+	return &reader{
+		cio:             &cio{mx: mx, entry: e},
+		segmentSize:     segmentSize,
+		currentSegment:  e.firstSegment,
+		segmentPosition: e.keySize,
+	}
 }
 
 func newWriter(mx *sync.Mutex, c *cache, e *entry) *writer {
 	return &writer{
-		cio:   &cio{mx: mx, entry: e, offset: e.keySize},
+		cio:   &cio{mx: mx, entry: e},
 		cache: c,
 	}
 }
 
-func (r *reader) read(p []byte) (int, error) {
-	r.mx.Lock()
-	defer r.mx.Unlock()
-	return r.entry.read(r.offset, p)
-}
-
 func (r *reader) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
+	var count int
+	for {
+		r.mx.Lock()
 
-	n, err := r.read(p)
-	for n == 0 && err == nil {
-		r.entry.waitData()
-		n, err = r.read(p)
-	}
+		if r.entry.discarded {
+			r.mx.Unlock()
+			return count, ErrItemDiscarded
+		}
 
-	r.offset += n
-	return n, err
+		if r.currentSegment == r.entry.lastSegment && len(p) > r.entry.segmentPosition {
+			max := r.entry.segmentPosition - r.segmentPosition
+			if max == 0 {
+				if r.entry.writeComplete {
+					r.mx.Unlock()
+					return 0, io.EOF
+				}
+
+				r.mx.Unlock()
+				r.entry.waitData()
+				continue
+			}
+
+			p = p[:max]
+		}
+
+		if len(p) == 0 {
+			r.mx.Unlock()
+			return count, nil
+		}
+
+		if r.currentSegment == nil ||
+			r.currentSegment == r.entry.lastSegment &&
+				r.segmentPosition == r.entry.segmentPosition {
+
+			if r.entry.writeComplete {
+				r.mx.Unlock()
+				return count, io.EOF
+			}
+
+			if count > 0 {
+				r.mx.Unlock()
+				return count, nil
+			}
+
+			r.mx.Unlock()
+			r.entry.waitData()
+			continue
+		}
+
+		n := r.currentSegment.(*segment).read(r.segmentPosition, p)
+		p = p[n:]
+		count += n
+		r.segmentPosition += n
+
+		if r.segmentPosition == r.segmentSize {
+			if r.currentSegment == r.entry.lastSegment {
+				r.currentSegment = nil
+			} else {
+				r.currentSegment = r.currentSegment.next()
+				r.segmentPosition = 0
+			}
+		}
+
+		r.mx.Unlock()
+	}
 }
 
 func (r *reader) Close() error {
@@ -80,14 +138,13 @@ func (w *writer) Write(p []byte) (int, error) {
 	var count int
 	for {
 		n, err := w.entry.write(p)
-		w.offset += n
 		p = p[n:]
 		count += n
 		if len(p) == 0 || err != nil {
 			return count, err
 		}
 
-		if ok := w.cache.allocateFor(w.entry); !ok {
+		if !w.cache.allocateFor(w.entry) {
 			return count, ErrWriteLimit
 		}
 	}
