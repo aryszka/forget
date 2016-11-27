@@ -113,8 +113,11 @@ func (r *reader) Close() error {
 	defer r.readCond.Broadcast()
 	defer r.mx.Unlock()
 
+	r.mx = nil
+	r.readCond = nil
 	r.entry.decReading()
 	r.entry = nil
+	r.currentSegment = nil
 	return nil
 }
 
@@ -181,6 +184,8 @@ func (w *writer) Close() error {
 	defer w.entry.broadcastWrite()
 	defer w.mx.Unlock()
 
+	w.mx = nil
+	w.readCond = nil
 	err := w.entry.closeWrite()
 	w.entry = nil
 	w.cache = nil

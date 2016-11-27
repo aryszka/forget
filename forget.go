@@ -213,7 +213,6 @@ func (s *SingleSpace) Del(key string) {
 // Close shuts down the cache and releases resource.
 func (s *SingleSpace) Close() { s.cache.Close() }
 
-// verify no memory leak, whether all objects outside drop the internal references after closed
 // max procs
 // copy by segment size
 // status, notifications
