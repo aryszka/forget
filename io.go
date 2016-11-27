@@ -6,8 +6,14 @@ import (
 	"sync"
 )
 
+type rwLocker interface {
+	sync.Locker
+	RLock()
+	RUnlock()
+}
+
 type cio struct {
-	mx    *sync.Mutex
+	mx    rwLocker
 	entry *entry
 }
 
@@ -34,7 +40,7 @@ var (
 	ErrWriterClosed = errors.New("writer closed")
 )
 
-func newReader(mx *sync.Mutex, e *entry, segmentSize int) *reader {
+func newReader(mx rwLocker, e *entry, segmentSize int) *reader {
 	return &reader{
 		cio:             &cio{mx: mx, entry: e},
 		segmentSize:     segmentSize,
@@ -43,7 +49,7 @@ func newReader(mx *sync.Mutex, e *entry, segmentSize int) *reader {
 	}
 }
 
-func newWriter(mx *sync.Mutex, c *cache, e *entry) *writer {
+func newWriter(mx rwLocker, c *cache, e *entry) *writer {
 	return &writer{
 		cio:   &cio{mx: mx, entry: e},
 		cache: c,
@@ -53,10 +59,10 @@ func newWriter(mx *sync.Mutex, c *cache, e *entry) *writer {
 func (r *reader) Read(p []byte) (int, error) {
 	var count int
 	for {
-		r.mx.Lock()
+		r.mx.RLock()
 
 		if r.entry.discarded {
-			r.mx.Unlock()
+			r.mx.RUnlock()
 			return count, ErrItemDiscarded
 		}
 
@@ -64,11 +70,11 @@ func (r *reader) Read(p []byte) (int, error) {
 			max := r.entry.segmentPosition - r.segmentPosition
 			if max == 0 {
 				if r.entry.writeComplete {
-					r.mx.Unlock()
+					r.mx.RUnlock()
 					return 0, io.EOF
 				}
 
-				r.mx.Unlock()
+				r.mx.RUnlock()
 				r.entry.waitData()
 				continue
 			}
@@ -77,7 +83,7 @@ func (r *reader) Read(p []byte) (int, error) {
 		}
 
 		if len(p) == 0 {
-			r.mx.Unlock()
+			r.mx.RUnlock()
 			return count, nil
 		}
 
@@ -86,16 +92,16 @@ func (r *reader) Read(p []byte) (int, error) {
 				r.segmentPosition == r.entry.segmentPosition {
 
 			if r.entry.writeComplete {
-				r.mx.Unlock()
+				r.mx.RUnlock()
 				return count, io.EOF
 			}
 
 			if count > 0 {
-				r.mx.Unlock()
+				r.mx.RUnlock()
 				return count, nil
 			}
 
-			r.mx.Unlock()
+			r.mx.RUnlock()
 			r.entry.waitData()
 			continue
 		}
@@ -114,7 +120,7 @@ func (r *reader) Read(p []byte) (int, error) {
 			}
 		}
 
-		r.mx.Unlock()
+		r.mx.RUnlock()
 	}
 }
 

@@ -23,7 +23,7 @@ type Options struct {
 // Cache provides an in-memory cache for arbitrary binary data
 // identified by keyspace and key. All methods of Cache are thread safe.
 type Cache struct {
-	mx      *sync.Mutex
+	mx      *sync.RWMutex
 	cache   *cache
 	hashing func() hash.Hash64
 }
@@ -35,7 +35,7 @@ func New(o Options) *Cache {
 	}
 
 	return &Cache{
-		mx:      &sync.Mutex{},
+		mx:      &sync.RWMutex{},
 		cache:   newCache(o.MaxSize/o.SegmentSize, o.SegmentSize),
 		hashing: o.hashing,
 	}

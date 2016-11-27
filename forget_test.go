@@ -778,3 +778,13 @@ func TestGetEmptyItem(t *testing.T) {
 		t.Error("failed to get item with empty key")
 	}
 }
+
+func TestItemsWithDifferentKeys(t *testing.T) {
+	c := New(Options{MaxSize: 24, SegmentSize: 6})
+	c.SetKey("1")
+	c.SetKey("123")
+	c.SetKey("123456789")
+	if !c.GetKey("1") || !c.GetKey("123") || !c.GetKey("123456789") {
+		t.Error("failed to get/set keys of different size")
+	}
+}

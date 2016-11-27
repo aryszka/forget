@@ -73,11 +73,8 @@ func (c *cache) writeKey(e *entry, key string) bool {
 }
 
 func (c *cache) lookup(id id) (*entry, bool) {
-	// optimization possiblity: if there is only a single entry in the bucket,
-	// no need to compare the key
 	for _, ei := range c.hash[id.hash%uint64(c.segmentCount)] {
-		k := ei.readKey()
-		if k == id.key {
+		if ei.keyEquals(id.key) {
 			return ei, true
 		}
 	}

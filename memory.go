@@ -1,5 +1,7 @@
 package forget
 
+import "bytes"
+
 type segment struct {
 	data                     []byte
 	prevSegment, nextSegment node
@@ -18,6 +20,15 @@ func (s *segment) prev() node     { return s.prevSegment }
 func (s *segment) next() node     { return s.nextSegment }
 func (s *segment) setPrev(p node) { s.prevSegment = p }
 func (s *segment) setNext(n node) { s.nextSegment = n }
+
+func (s *segment) equals(offset int, p []byte) (bool, int) {
+	available := len(s.data) - offset
+	if len(p) > available {
+		p = p[:available]
+	}
+
+	return bytes.Equal(p, s.data[offset:offset+len(p)]), len(p)
+}
 
 func (s *segment) read(offset int, p []byte) int {
 	n := copy(p, s.data[offset:])

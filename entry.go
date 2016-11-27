@@ -12,7 +12,6 @@ type entry struct {
 	prevEntry, nextEntry      node
 }
 
-// entry doesn't hold a lock, but should be accessed in synchronized way
 func newEntry(hash uint64, keySize int) *entry {
 	return &entry{
 		hash:     hash,
@@ -53,21 +52,22 @@ func (e *entry) appendSegment(s *segment) {
 	e.segmentPosition = 0
 }
 
-func (e *entry) readKey() string {
-	if e.firstSegment == nil {
-		return ""
+func (e *entry) keyEquals(key string) bool {
+	if len(key) != e.keySize {
+		return false
 	}
 
-	k := make([]byte, e.keySize)
-	s := e.firstSegment
-	p := k
-	for len(p) > 0 {
-		n := s.(*segment).read(0, p)
-		p = p[n:]
-		s = s.next()
+	p, s := []byte(key), e.firstSegment
+	for len(p) > 0 && s != nil {
+		ok, n := s.(*segment).equals(0, p)
+		if !ok {
+			return false
+		}
+
+		p, s = p[n:], s.next()
 	}
 
-	return string(k)
+	return len(p) == 0
 }
 
 func (e *entry) write(p []byte) (int, error) {
