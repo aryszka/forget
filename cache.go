@@ -5,18 +5,20 @@ import (
 	"time"
 )
 
-// temporary structure to pass the key and its hash around during individual calls
+// temporary structure to pass the keyspace, key and its hash around during individual calls
 type id struct {
 	hash          uint64
 	keyspace, key string
 }
 
 type cache struct {
-	segmentCount, segmentSize int
-	memory                    *memory
-	lru, toDelete             *list
-	hash                      [][]*entry
-	closed                    bool
+	segmentCount, segmentSize, lruIndex int
+	memory                              *memory
+	toDelete                            *list
+	lru                                 map[string]*list
+	allLRU                              []*list
+	hash                                [][]*entry
+	closed                              bool
 }
 
 var (
@@ -31,7 +33,7 @@ func newCache(segmentCount, segmentSize int) *cache {
 		segmentCount: segmentCount,
 		segmentSize:  segmentSize,
 		memory:       newMemory(segmentCount, segmentSize),
-		lru:          new(list),
+		lru:          make(map[string]*list),
 		toDelete:     new(list),
 		hash:         make([][]*entry, segmentCount), // there cannot be more entries than segments
 	}
@@ -55,7 +57,31 @@ func (c *cache) evictFromFor(l *list, e *entry) bool {
 }
 
 func (c *cache) evictFor(e *entry) bool {
-	return c.evictFromFor(c.toDelete, e) || c.evictFromFor(c.lru, e)
+	if c.evictFromFor(c.toDelete, e) {
+		return true
+	}
+
+	lru, ok := c.lru[e.keyspace]
+	if ok && c.evictFromFor(lru, e) {
+		return true
+	}
+
+	// round robin the rest
+	var evicted bool
+	for i := 0; i < len(c.allLRU); i++ {
+		current := c.allLRU[(i+c.lruIndex)%len(c.allLRU)]
+		if current != lru && c.evictFromFor(current, e) {
+			evicted = true
+			break
+		}
+	}
+
+	c.lruIndex++
+	if c.lruIndex >= len(c.allLRU) {
+		c.lruIndex = 0
+	}
+
+	return evicted
 }
 
 func (c *cache) allocateFor(e *entry) bool {
@@ -121,13 +147,25 @@ func (c *cache) deleteLookup(e *entry) bool {
 }
 
 func (c *cache) touchEntry(e *entry) {
-	c.lru.remove(e)
-	c.lru.insert(e, nil)
+	c.lru[e.keyspace].remove(e)
+	c.lru[e.keyspace].insert(e, nil)
 }
 
 func (c *cache) deleteEntry(e *entry) bool {
 	if c.deleteLookup(e) {
-		c.lru.remove(e)
+		lru := c.lru[e.keyspace]
+		lru.remove(e)
+		if lru.first == nil {
+			delete(c.lru, e.keyspace)
+			for i, current := range c.allLRU {
+				if current == lru {
+					last := len(c.allLRU) - 1
+					c.allLRU[last], c.allLRU[i], c.allLRU = nil, c.allLRU[last], c.allLRU[:last]
+					break
+				}
+			}
+		}
+
 		if e.reading > 0 {
 			c.toDelete.insert(e, nil)
 			return false
@@ -179,7 +217,14 @@ func (c *cache) set(id id, ttl time.Duration) (*entry, error) {
 		return nil, err
 	}
 
-	c.lru.insert(e, nil)
+	lru := c.lru[id.keyspace]
+	if lru == nil {
+		lru = new(list)
+		c.lru[id.keyspace] = lru
+		c.allLRU = append(c.allLRU, lru)
+	}
+
+	lru.insert(e, nil)
 	c.addLookup(id, e)
 
 	return e, nil
@@ -209,7 +254,9 @@ func (c *cache) close() {
 	}
 
 	c.closeAll(c.toDelete)
-	c.closeAll(c.lru)
+	for _, lru := range c.lru {
+		c.closeAll(lru)
+	}
 
 	c.memory = nil
 	c.lru = nil

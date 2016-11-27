@@ -1178,3 +1178,79 @@ func TestSingleSpaceClose(t *testing.T) {
 		c.Close()
 	}()
 }
+
+func TestEvictFirstFromOwnKeyspace(t *testing.T) {
+	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	defer c.Close()
+
+	if !c.SetKey("s1", "foo", time.Hour) {
+		t.Error("failed to set item")
+		return
+	}
+
+	if !c.SetKey("s2", "bar", time.Hour) {
+		t.Error("failed to set item")
+		return
+	}
+
+	if !c.GetKey("s1", "foo") {
+		t.Error("failed to touch item")
+		return
+	}
+
+	if !c.SetKey("s1", "baz", time.Hour) {
+		t.Error("failed to set new item")
+		return
+	}
+
+	if c.GetKey("s1", "foo") || !c.GetKey("s1", "baz") || !c.GetKey("s2", "bar") {
+		t.Error("invalid eviction order")
+	}
+}
+
+func TestEvictFromOtherKeyspace(t *testing.T) {
+	c := New(Options{MaxSize: 6, SegmentSize: 3})
+	defer c.Close()
+
+	for ks, k := range map[string]string{
+		"s1": "foo",
+		"s2": "bar",
+		"s3": "baz",
+	} {
+		if !c.SetKey(ks, k, time.Hour) {
+			t.Error("failed to set item")
+			return
+		}
+	}
+}
+
+func TestEvictFromOtherKeyspaceRoundRobin(t *testing.T) {
+	c := New(Options{MaxSize: 18, SegmentSize: 3})
+	defer c.Close()
+
+	for ks, k := range map[string][]string{
+		"s1": {"foo", "qux"},
+		"s2": {"bar", "fo2"},
+		"s3": {"baz", "ba2"},
+		"s4": {"fo3"},
+		"s5": {"ba3"},
+		"s6": {"qu3"},
+	} {
+		for _, ki := range k {
+			if !c.SetKey(ks, ki, time.Hour) {
+				t.Error("failed to set item")
+				return
+			}
+		}
+	}
+
+	c.Del("s1", "qux")
+	c.Del("s2", "fo2")
+	c.Del("s3", "ba2")
+	c.Del("s4", "fo3")
+
+	if !c.SetKey("s5", "foobarbazquxquux", time.Hour) {
+		t.Error("failed to set item")
+		return
+	}
+}

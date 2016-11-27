@@ -215,6 +215,7 @@ func (s *SingleSpace) Close() { s.cache.Close() }
 
 // verify no memory leak, whether all objects outside drop the internal references after closed
 // max procs
+// copy by segment size
 // status, notifications
 // refactor tests with documentation, examples
 // fuzzy testing
