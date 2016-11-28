@@ -1,165 +1,132 @@
 package forget
 
 import (
-	"hash"
-	"hash/fnv"
-	"io"
+	"errors"
+	"sync"
 	"time"
 )
 
-const (
-
-	// DefaultMaxSize defines the maximum total size of items and their
-	// keys stored in the cache if it is not specified in the
-	// initialization options.
-	DefaultMaxSize = 1 << 30
-
-	// DefaultSegmentSize defines the used segment size if it is not
-	// defined in the initialization options.
-	DefaultSegmentSize = 1 << 15
-)
-
-type dataMode int
-
-const (
-	dataRead dataMode = iota
-	dataWrite
-)
-
-type segment struct {
-	data               []byte
-	prevNode, nextNode node
-}
-
-type entry struct {
-	hash                      uint64
-	firstSegment, lastSegment node
-	size                      Size
-	expiration                time.Time
-	prevNode, nextNode        node
-	filled                    int
-	discarded                 bool
-	wait                      []chan<- struct{}
-}
-
-type keyspace struct {
-	entries *list
-	lookup  map[uint64][]*entry
-	size    Size
+// temporary structure to pass the keyspace, key and its hash around during individual calls
+type id struct {
+	hash          uint64
+	keyspace, key string
 }
 
 type cache struct {
-	maxSegments, segmentSize int
-	size                     Size
-	hashing                  hash.Hash64
-	data                     *list
-	firstFree                node
-	spaces                   map[string]*keyspace
+	segmentCount, segmentSize, lruOffset int
+	mx                                   *sync.RWMutex
+	readCond                             *sync.Cond
+	memory                               *memory
+	toDelete                             *list
+	lru                                  map[string]*list
+	allLRU                               []*list
+	hash                                 [][]*entry
+	closed                               bool
+	status                               *InstanceStatus
 }
 
-func (s *segment) prev() node     { return s.prevNode }
-func (s *segment) next() node     { return s.nextNode }
-func (s *segment) setPrev(n node) { s.prevNode = n }
-func (s *segment) setNext(n node) { s.nextNode = n }
+var (
+	errAllocationFailed = errors.New("allocation for key failed")
 
-func (e *entry) prev() node     { return e.prevNode }
-func (e *entry) next() node     { return e.nextNode }
-func (e *entry) setPrev(n node) { e.prevNode = n }
-func (e *entry) setNext(n node) { e.nextNode = n }
+	// ErrCacheClosed is returned when calling an operation on a closed cache.
+	ErrCacheClosed = errors.New("cache closed")
+)
 
-func initMemory(o Options) *list {
-	segments := new(list)
-	for i := 0; i < o.MaxSize; i += o.SegmentSize {
-		segments.append(&segment{data: make([]byte, o.SegmentSize)})
-	}
-
-	return segments
-}
-
-func newCache(o Options) *cache {
-	if o.MaxSize <= 0 {
-		o.MaxSize = DefaultMaxSize
-	}
-
-	if o.SegmentSize <= 0 {
-		o.SegmentSize = DefaultSegmentSize
-	}
-
-	if o.SegmentSize > o.MaxSize {
-		o.SegmentSize = o.MaxSize
-	}
-
-	o.MaxSize -= o.MaxSize % o.SegmentSize
-
-	if o.Hash == nil {
-		o.Hash = fnv.New64a()
-	}
-
-	data := initMemory(o)
+func newCache(segmentCount, segmentSize int) *cache {
 	return &cache{
-		maxSegments: o.MaxSize / o.SegmentSize,
-		segmentSize: o.SegmentSize,
-		hashing:     o.Hash,
-		data:        data,
-		firstFree:   data.first,
-		spaces:      make(map[string]*keyspace),
+		segmentCount: segmentCount,
+		segmentSize:  segmentSize,
+		mx:           &sync.RWMutex{},
+		readCond:     sync.NewCond(&sync.Mutex{}),
+		memory:       newMemory(segmentCount, segmentSize),
+		lru:          make(map[string]*list),
+		toDelete:     new(list),
+		hash:         make([][]*entry, segmentCount), // there cannot be more entries than segments
+		status:       newInstanceStatus(segmentSize, segmentCount*segmentSize),
 	}
 }
 
-func (c *cache) hash(key string) uint64 {
-	c.hashing.Reset()
-	c.hashing.Write([]byte(key))
-	return c.hashing.Sum64()
+func (c *cache) bucketIndex(hash uint64) int {
+	return int(hash % uint64(c.segmentCount))
 }
 
-func (c *cache) readWrite(e *entry, data []byte, offset int, mode dataMode) {
-	var (
-		index, copied int
-		to, from      []byte
-		current       node
-		s             *segment
-	)
-
-	current = e.firstSegment
-	for copied < len(data) {
-		s = current.(*segment)
-		if index+c.segmentSize >= offset {
-			var segmentIndex int
-			if index <= offset {
-				segmentIndex = offset - index
-			}
-
-			switch mode {
-			case dataWrite:
-				to = s.data[segmentIndex:]
-				from = data[copied:]
-			default:
-				to = data[copied:]
-				from = s.data[segmentIndex:]
-			}
-
-			copied += copy(to, from)
+func (c *cache) evictFromFor(l *list, e *entry) bool {
+	current := l.first
+	for current != nil {
+		if current != e && c.deleteEntry(current.(*entry)) {
+			return true
 		}
 
 		current = current.next()
-		index += c.segmentSize
+	}
+
+	return false
+}
+
+func (c *cache) evictFor(e *entry) bool {
+	if c.evictFromFor(c.toDelete, e) {
+		return true
+	}
+
+	lru, ok := c.lru[e.keyspace]
+	if ok && c.evictFromFor(lru, e) {
+		return true
+	}
+
+	// round robin the rest
+	var evicted bool
+	for i := 0; i < len(c.allLRU); i++ {
+		lruIndex := (i + c.lruOffset) % len(c.allLRU)
+		current := c.allLRU[lruIndex]
+		if current != lru && c.evictFromFor(current, e) {
+			evicted = true
+			break
+		}
+	}
+
+	c.lruOffset++
+	if c.lruOffset >= len(c.allLRU) {
+		c.lruOffset = 0
+	}
+
+	return evicted
+}
+
+func (c *cache) allocateFor(e *entry) error {
+	_, last := e.data()
+	for {
+		if s, ok := c.memory.allocate(); ok {
+			if last != nil && s != last.next() {
+				c.memory.move(s, last.next())
+			}
+
+			e.appendSegment(s)
+			return nil
+		}
+
+		if !c.evictFor(e) {
+			return errAllocationFailed
+		}
 	}
 }
 
-func (c *cache) readData(e *entry, offset, size int) []byte {
-	data := make([]byte, size)
-	c.readWrite(e, data, offset, dataRead)
-	return data
+func (c *cache) writeKey(e *entry, key string) error {
+	p := []byte(key)
+	for len(p) > 0 {
+		if err := c.allocateFor(e); err != nil {
+			return err
+		}
+
+		n, _ := e.write(p)
+		p = p[n:]
+	}
+
+	return nil
 }
 
-func (c *cache) writeData(e *entry, offset int, data []byte) {
-	c.readWrite(e, data, offset, dataWrite)
-}
-
-func (c *cache) lookup(s *keyspace, hash uint64, key string) (*entry, bool) {
-	for _, e := range s.lookup[hash] {
-		currentKey := c.readData(e, 0, len(key))
-		if string(currentKey) == key {
+func (c *cache) lookup(id id) (*entry, bool) {
+	for _, e := range c.hash[c.bucketIndex(id.hash)] {
+		if e.keyspace == id.keyspace && e.keyEquals(id.key) {
 			return e, true
 		}
 	}
@@ -167,283 +134,169 @@ func (c *cache) lookup(s *keyspace, hash uint64, key string) (*entry, bool) {
 	return nil, false
 }
 
-func (c *cache) deleteEntry(space *keyspace, e *entry) Size {
-	e.discarded = true
-	space.entries.remove(e)
+func (c *cache) addLookup(id id, e *entry) {
+	index := c.bucketIndex(id.hash)
+	c.hash[index] = append(c.hash[index], e)
+}
 
-	if e.size.Segments > 0 {
-		if e.lastSegment.next() != c.firstFree {
-			c.data.removeRange(e.firstSegment, e.lastSegment)
-			c.data.insertRange(e.firstSegment, e.lastSegment, c.firstFree)
+func (c *cache) touchEntry(e *entry) {
+	c.lru[e.keyspace].remove(e)
+	c.lru[e.keyspace].insert(e, nil)
+}
+
+func (c *cache) removeKeyspaceLRU(lru *list, keyspace string) {
+	delete(c.lru, keyspace)
+	for i, current := range c.allLRU {
+		if current == lru {
+			last := len(c.allLRU) - 1
+			c.allLRU[last], c.allLRU[i], c.allLRU = nil, c.allLRU[last], c.allLRU[:last]
+			break
 		}
+	}
+}
 
-		c.firstFree = e.firstSegment
+func (c *cache) keyspaceLRU(keyspace string) *list {
+	lru := c.lru[keyspace]
+	if lru == nil {
+		lru = new(list)
+		c.lru[keyspace] = lru
+		c.allLRU = append(c.allLRU, lru)
 	}
 
-	hashEntries := space.lookup[e.hash]
-	for i, ei := range hashEntries {
+	return lru
+}
+
+func (c *cache) deleteLookup(e *entry) bool {
+	index := c.bucketIndex(e.hash)
+	bucket := c.hash[index]
+	for i, ei := range bucket {
 		if ei == e {
-			last := len(hashEntries) - 1
-			hashEntries[i], hashEntries[last], hashEntries = hashEntries[last], nil, hashEntries[:last]
+			last := len(bucket) - 1
+			bucket[last], bucket[i], bucket = nil, bucket[last], bucket[:last]
+			c.hash[index] = bucket
+			return true
 		}
 	}
 
-	sizeChange := Size{}.sub(e.size)
-	space.size = space.size.sub(e.size)
-	c.size = c.size.sub(e.size)
-
-	if len(hashEntries) > 0 {
-		space.lookup[e.hash] = hashEntries
-		return sizeChange
-	}
-
-	delete(space.lookup, e.hash)
-	if len(space.lookup) == 0 {
-		for k, s := range c.spaces {
-			if s == space {
-				delete(c.spaces, k)
-				break
-			}
-		}
-	}
-
-	return sizeChange
+	// false means that it was already deleted from the lookup
+	// but there were active readers at the time
+	return false
 }
 
-func (c *cache) requiredSegments(key string, size int) int {
-	l := len(key) + size
-	n := l / c.segmentSize
-
-	if l%c.segmentSize == 0 {
-		return n
-	}
-
-	return n + 1
-}
-
-func (c *cache) allocate(kspace string, requiredSegments int) (node, node, map[string]int, Size) {
-	if requiredSegments == 0 {
-		return nil, nil, nil, Size{}
-	}
-
-	var sizeChange Size
-	evicted := make(map[string]int)
-
-	if space, ok := c.spaces[kspace]; ok {
-		current := space.entries.first
-		for c.maxSegments-c.size.Segments < requiredSegments && current != nil {
-			sc := c.deleteEntry(space, current.(*entry))
-			evicted[kspace] -= sc.Effective
-			sizeChange = sizeChange.add(sc)
-			current = current.next()
-		}
-	}
-
-	if c.maxSegments-c.size.Segments < requiredSegments {
-		spaces := make([]*keyspace, 0, len(c.spaces))
-		keys := make(map[*keyspace]string)
-		for k, s := range c.spaces {
-			spaces = append(spaces, s)
-			keys[s] = k
+func (c *cache) deleteEntry(e *entry) bool {
+	if c.deleteLookup(e) {
+		lru := c.lru[e.keyspace]
+		lru.remove(e)
+		if lru.empty() {
+			c.removeKeyspaceLRU(lru, e.keyspace)
 		}
 
-		var counter int
-		for c.maxSegments-c.size.Segments < requiredSegments {
-			var s *keyspace
-			for s == nil || s.entries.first == nil {
-				s = spaces[counter]
-				if s.entries.first == nil {
-					spaces = append(spaces[:counter], spaces[counter+1:]...)
-					counter %= len(spaces)
-				}
-			}
-
-			sc := c.deleteEntry(s, s.entries.first.(*entry))
-			evicted[keys[s]] -= sc.Effective
-			sizeChange = sizeChange.add(sc)
-			counter = (counter + 1) % len(spaces)
+		if e.reading > 0 {
+			c.toDelete.insert(e, nil)
+			c.status.incReadersOnDeleted(e.keyspace)
+			return false
 		}
-	}
-
-	first, last := c.firstFree, c.firstFree
-	c.firstFree = last.next()
-	requiredSegments--
-	for requiredSegments > 0 {
-		last, c.firstFree = c.firstFree, c.firstFree.next()
-		requiredSegments--
-	}
-
-	return first, last, evicted, sizeChange
-}
-
-func (c *cache) read(e *entry, offset int, p []byte) (int, error) {
-	if e.discarded {
-		return 0, ErrItemDiscarded
-	}
-
-	if e.filled < e.size.Effective && offset >= e.filled {
-		return 0, nil
-	}
-
-	if offset >= e.size.Effective {
-		return 0, io.EOF
-	}
-
-	maxCount := e.size.Effective - offset
-	if len(p) > maxCount {
-		p = p[:maxCount]
-	}
-
-	c.readWrite(e, p, offset, dataRead)
-	return len(p), nil
-}
-
-func (c *cache) write(e *entry, offset int, p []byte) (int, error) {
-	if e.discarded {
-		return 0, ErrItemDiscarded
-	}
-
-	if offset >= e.size.Effective {
-		return 0, ErrWriteLimit
-	}
-
-	var err error
-	maxCount := e.size.Effective - offset
-	if len(p) > maxCount {
-		err = ErrWriteLimit
-		p = p[:maxCount]
-	}
-
-	c.readWrite(e, p, offset, dataWrite)
-	e.filled += len(p)
-
-	for _, w := range e.wait {
-		close(w)
-	}
-
-	return len(p), err
-}
-
-func (c *cache) get(kspace, key string) (*entry, bool, Size) {
-	var (
-		space      *keyspace
-		exists     bool
-		e          *entry
-		sizeChange Size
-	)
-
-	if space, exists = c.spaces[kspace]; !exists {
-		return nil, false, Size{}
-	}
-
-	if e, exists = c.lookup(space, c.hash(key), key); !exists {
-		return nil, false, Size{}
-	}
-
-	if e.expiration.Before(time.Now()) {
-		sizeChange = c.deleteEntry(space, e)
-		return nil, false, sizeChange
-	}
-
-	space.entries.remove(e)
-	space.entries.append(e)
-	return e, true, Size{}
-}
-
-func (c *cache) set(kspace, key string, size int, ttl time.Duration) (*entry, bool, map[string]int, Size) {
-	var (
-		hash             uint64
-		space            *keyspace
-		exists           bool
-		e                *entry
-		requiredSegments int
-		scAlloc          Size
-		evicted          map[string]int
-		sizeChange       Size
-	)
-
-	hash = c.hash(key)
-
-	if space, exists = c.spaces[kspace]; exists {
-		e, exists = c.lookup(space, hash, key)
-	}
-
-	requiredSegments = c.requiredSegments(key, size)
-	if requiredSegments > c.maxSegments {
-		if exists {
-			sizeChange = c.deleteEntry(space, e)
+	} else {
+		if e.reading > 0 {
+			return false
 		}
 
-		return nil, false, nil, sizeChange
+		c.toDelete.remove(e)
+		c.status.decReadersOnDeleted(e.keyspace)
 	}
 
-	if exists {
-		sizeChange = c.deleteEntry(space, e)
+	first, last := e.data()
+	if first != nil {
+		c.memory.free(first, last)
 	}
 
-	space = c.spaces[kspace]
-	if space == nil {
-		space = &keyspace{entries: new(list), lookup: make(map[uint64][]*entry)}
-		c.spaces[kspace] = space
-	}
-
-	e = &entry{hash: hash}
-	space.lookup[hash] = append(space.lookup[hash], e)
-	e.firstSegment, e.lastSegment, evicted, scAlloc = c.allocate(kspace, requiredSegments)
-	sizeChange = sizeChange.add(scAlloc)
-
-	e.size = Size{
-		Len:       1,
-		Segments:  requiredSegments,
-		Effective: len(key) + size,
-	}
-	sizeChange = sizeChange.add(e.size)
-	space.size = space.size.add(e.size)
-	c.size = c.size.add(e.size)
-
-	e.expiration = time.Now().Add(ttl)
-	c.writeData(e, 0, []byte(key))
-	e.filled = len(key)
-	space.entries.append(e)
-
-	return e, true, evicted, sizeChange
+	e.close()
+	c.status.itemDeleted(e)
+	return true
 }
 
-func (c *cache) del(kspace, key string) Size {
-	var (
-		space  *keyspace
-		exists bool
-		e      *entry
-	)
-
-	if space, exists = c.spaces[kspace]; !exists {
-		return Size{}
+func (c *cache) get(id id) (*entry, bool) {
+	if c.closed {
+		return nil, false
 	}
 
-	if e, exists = c.lookup(space, c.hash(key), key); !exists {
-		return Size{}
+	e, ok := c.lookup(id)
+	if !ok {
+		return nil, false
 	}
 
-	return c.deleteEntry(space, e)
+	if e.expired() {
+		c.deleteEntry(e)
+		return nil, false
+	}
+
+	c.touchEntry(e)
+	e.reading++
+	return e, ok
 }
 
-func (c *cache) getKeyspaceStatus(kspace string) Size {
-	if space, ok := c.spaces[kspace]; ok {
-		return space.size
+func (c *cache) set(id id, ttl time.Duration) (*entry, error) {
+	if c.closed {
+		return nil, ErrCacheClosed
 	}
 
-	return Size{}
+	c.del(id)
+	e := newEntry(id.hash, id.keyspace, len(id.key), ttl)
+
+	if err := c.writeKey(e, id.key); err != nil {
+		return nil, err
+	}
+
+	lru := c.keyspaceLRU(e.keyspace)
+	lru.insert(e, nil)
+	c.addLookup(id, e)
+	c.status.itemAdded(e)
+
+	return e, nil
 }
 
-func (c *cache) getStatus() *Status {
-	s := &Status{
-		Keyspaces: make(map[string]Size),
-		Size:      c.size,
+func (c *cache) del(id id) {
+	if c.closed {
+		return
 	}
 
-	for k, space := range c.spaces {
-		s.Keyspaces[k] = space.size
+	if e, ok := c.lookup(id); ok {
+		c.deleteEntry(e)
+	}
+}
+
+func (c *cache) waitRead() {
+	c.readCond.L.Lock()
+	c.readCond.Wait()
+	c.readCond.L.Unlock()
+}
+
+func (c *cache) broadcastRead() {
+	c.readCond.Broadcast()
+}
+
+func (c *cache) closeAll(l *list) {
+	e := l.first
+	for e != nil {
+		e.(*entry).close()
+		e = e.next()
+	}
+}
+
+func (c *cache) close() {
+	if c.closed {
+		return
 	}
 
-	return s
+	c.closeAll(c.toDelete)
+	for _, lru := range c.lru {
+		c.closeAll(lru)
+	}
+
+	c.memory = nil
+	c.memory = nil
+	c.toDelete = nil
+	c.lru = nil
+	c.hash = nil
+	c.closed = true
 }

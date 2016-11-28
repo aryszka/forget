@@ -3,420 +3,287 @@ package forget
 import (
 	"bytes"
 	"hash"
+	"hash/fnv"
 	"io"
+	"runtime"
 	"time"
 )
 
-type messageType int
-
 const (
-	getMsg messageType = iota
-	setMsg
-	delMsg
-	statusMsg
-	cacheStatusMsg
+	// DefaultMaxSize is used when MaxSize is not specified in the initial Options.
+	DefaultMaxSize = 1 << 30
+
+	// DefaultSegmentSize is used when SegmentSize is not specified in the initial Options.
+	DefaultSegmentSize = 1 << 15
 )
 
-type message struct {
-	typ            messageType
-	response       chan message
-	ok             bool
-	keyspace, key  string
-	data           []byte
-	size           int
-	io             io.ReadWriter
-	ttl            time.Duration
-	keyspaceStatus Size
-	status         *Status
-}
+// Options objects are used to pass in parameters to new Cache instances.
+type Options struct {
 
-// Size objects provide size information about the cache or individual
-// keyspaces.
-type Size struct {
+	// MaxSize defines the maximum size of the memory.
+	MaxSize int
 
-	// Len contains the number of stored items either in the cache or a
-	// keyspace.
-	Len int
+	// SegmentSize defines the segment size in the memory.
+	SegmentSize int
 
-	// Segments contains the number of segments used by active data in
-	// the cache or in a keyspace.
-	Segments int
-
-	// Effective contains the net size of the stored items, including
-	// the keys and the payload, in the cache or in a keyspace.
-	Effective int
-}
-
-// Status objects contain information about the cache.
-type Status struct {
-
-	// Keyspaces contain the found active keyspaces in the cache and
-	// their size metrics.
-	Keyspaces map[string]Size
-
-	// Size contains total metrics about the cache.
-	Size
-}
-
-// NotificationLevel is used to configure the detail level of the
-// provided notifications.
-type NotificationLevel int
-
-const (
-	// Limited notification level instructs the cache to send
-	// notifications only on the events of cache eviction.
-	Limited NotificationLevel = iota
-
-	// Moderate notification level instructs the cache to send
-	// notifications only on the evetns of cache eviction and cache
-	// misses.
-	Moderate
-
-	// Verbose notification level instructs the cache to send
-	// notifications on every event, including: cache hits and misses,
-	// any size changes and cache eviction.
-	Verbose
-)
-
-// NotificationType indicates the causing event of a notification.
-type NotificationType int
-
-const (
-
-	// Eviction indicates that some active items were purged from the
-	// cache.
-	Eviction NotificationType = iota
-
-	// Miss indicates that a Get() call didn't find a key in the cache.
-	Miss
-
-	// Hit indicates that a Get() call found a key in the cache.
-	Hit
-
-	// SizeChange indicates that there was a change in the total size of
-	// the stored items.
-	SizeChange
-)
-
-// Notification objects are sent by the cache about internal events,
-// based on the configuration options. To receive notifications, pass in
-// a channel with the options to New(). It is recommended to use a
-// buffered channel.
-type Notification struct {
-
-	// Type indicates the reason of the notification.
-	Type NotificationType
-
-	// Status provides information about the utilization of the cache.
-	Status *Status
-
-	// Keyspace contains the keyspace name in which the change happened
-	// that caused the notification.
-	Keyspace string
-
-	// Key contains the key whose related operation caused the
-	// notification.
-	Key string
-
-	// Evicted contains the number of items evicted from the cache in
-	// each keyspace.
-	Evicted map[string]int
-
-	// SizeChange contains the size difference of the cache before and
-	// after the event causing the notification.
-	SizeChange Size
+	hashing  func() hash.Hash64
+	maxProcs int
 }
 
 // Cache provides an in-memory cache for arbitrary binary data
 // identified by keyspace and key. All methods of Cache are thread safe.
 type Cache struct {
-	cache             *cache
-	req               chan message
-	quit, closed      chan struct{}
-	notificationLevel NotificationLevel
-	notify            chan<- *Notification
-	io                chan ioMessage
+	options     Options
+	maxItemSize int
+	cache       []*cache
 }
 
-// Options are used to pass in initialization options to a cache
-// instance.
-type Options struct {
-
-	// MaxSize tells the maximum (preallocated) size of the cache.
-	MaxSize int
-
-	// SegmentSize tells the size of the memory segments used by the
-	// cache. (See the package documentation for the right choices.)
-	SegmentSize int
-
-	// Hash may define alternative hashing algorithms to hash the cache
-	// keys. The default is FNV-1a. (Hash collisions don't cause missing
-	// items.)
-	Hash hash.Hash64
-
-	// Notify, if set, is used to receive notifications about the
-	// cache's internal state and events. The channel is not closed by
-	// the cache when the cache is closed, but also no more
-	// notifications are sent.
-	Notify chan<- *Notification
-
-	// NotificationLevel sets the detail level of the notifications
-	// received from the cache.
-	NotificationLevel NotificationLevel
+// SingleSpace is equivalent to Cache but it doesn't use keyspaces.
+type SingleSpace struct {
+	cache *Cache
 }
 
-func (s Size) add(a Size) Size {
-	s.Len += a.Len
-	s.Segments += a.Segments
-	s.Effective += a.Effective
-	return s
-}
-
-func (s Size) sub(a Size) Size {
-	s.Len -= a.Len
-	s.Segments -= a.Segments
-	s.Effective -= a.Effective
-	return s
-}
-
-func (s Size) zero() bool {
-	return s.Len == 0 && s.Segments == 0 && s.Effective == 0
-}
-
-// New initializes a new cache instance. Use Close() to release
-// resources when the cache is not required anymore in a further running
-// process.
+// New initializes a cache.
 func New(o Options) *Cache {
-	c := &Cache{
-		cache:             newCache(o),
-		req:               make(chan message),
-		quit:              make(chan struct{}),
-		closed:            make(chan struct{}),
-		notify:            o.Notify,
-		notificationLevel: o.NotificationLevel,
-		io:                make(chan ioMessage),
+	if o.hashing == nil {
+		o.hashing = fnv.New64a
 	}
 
-	go c.run()
-	return c
-}
-
-func (c *Cache) sendNotification(n *Notification) {
-	select {
-	case c.notify <- n:
-	case <-c.quit:
-	}
-}
-
-func (c *Cache) notifyHitMiss(keyspace, key string, hit bool, sizeChange Size) {
-	if c.notify == nil || c.notificationLevel < Moderate {
-		return
-	}
-
-	if hit && c.notificationLevel < Verbose {
-		return
-	}
-
-	n := &Notification{
-		Keyspace:   keyspace,
-		Key:        key,
-		SizeChange: sizeChange,
-		Status:     c.cache.getStatus(),
-	}
-
-	if hit {
-		n.Type = Hit
-	} else {
-		n.Type = Miss
-	}
-
-	c.sendNotification(n)
-}
-
-func (c *Cache) notifySet(keyspace, key string, evicted map[string]int, sizeChange Size) {
-	if c.notify == nil {
-		return
-	}
-
-	if c.notificationLevel < Verbose && len(evicted) == 0 {
-		return
-	}
-
-	if len(evicted) == 0 && sizeChange.zero() {
-		return
-	}
-
-	n := &Notification{
-		Keyspace:   keyspace,
-		Key:        key,
-		Evicted:    evicted,
-		SizeChange: sizeChange,
-		Status:     c.cache.getStatus(),
-	}
-
-	if len(evicted) > 0 {
-		n.Type = Eviction
-	} else {
-		n.Type = SizeChange
-	}
-
-	c.sendNotification(n)
-}
-
-func (c *Cache) notifyDelete(keyspace, key string, sizeChange Size) {
-	if c.notify == nil || c.notificationLevel < Verbose || sizeChange.zero() {
-		return
-	}
-
-	c.sendNotification(&Notification{
-		Type:       SizeChange,
-		Status:     c.cache.getStatus(),
-		Keyspace:   keyspace,
-		Key:        key,
-		SizeChange: sizeChange,
-	})
-}
-
-func (c *Cache) run() {
-	for {
-		select {
-		case req := <-c.req:
-			var rsp message
-			switch req.typ {
-			case getMsg:
-				var sizeChange Size
-				// rsp.data, rsp.ok, sizeChange = c.cache.get(req.keyspace, req.key)
-				var e *entry
-				e, rsp.ok, sizeChange = c.cache.get(req.keyspace, req.key)
-				c.notifyHitMiss(req.keyspace, req.key, rsp.ok, sizeChange)
-				if rsp.ok {
-					rsp.io = &rw{req: c.io, entry: e, offset: len(req.key), quit: c.quit}
-				}
-			case setMsg:
-				e, ok, evicted, sizeChange := c.cache.set(req.keyspace, req.key, req.size, req.ttl)
-				rsp.ok = ok
-				c.notifySet(req.keyspace, req.key, evicted, sizeChange)
-				if ok {
-					rsp.io = &rw{req: c.io, entry: e, offset: len(req.key), quit: c.quit}
-				}
-			case delMsg:
-				sizeChange := c.cache.del(req.keyspace, req.key)
-				c.notifyDelete(req.keyspace, req.key, sizeChange)
-			case statusMsg:
-				rsp.keyspaceStatus = c.cache.getKeyspaceStatus(req.keyspace)
-			case cacheStatusMsg:
-				rsp.status = c.cache.getStatus()
-			}
-
-			req.response <- rsp
-		case req := <-c.io:
-			switch req.typ {
-			case readMsg:
-				rsp := ioMessage{}
-				rsp.count, rsp.err = c.cache.read(req.entry, req.offset, req.buffer)
-				if rsp.count == 0 && rsp.err == nil {
-					req.entry.wait = append(req.entry.wait, req.wait)
-				}
-
-				req.response <- rsp
-			case writeMsg:
-				rsp := ioMessage{}
-				rsp.count, rsp.err = c.cache.write(req.entry, req.offset, req.buffer)
-				req.response <- rsp
-			}
-		case <-c.quit:
-			close(c.closed)
-			return
+	if o.maxProcs <= 0 {
+		o.maxProcs = runtime.NumCPU()
+		if o.maxProcs > runtime.GOMAXPROCS(-1) {
+			o.maxProcs = runtime.GOMAXPROCS(-1)
 		}
 	}
-}
 
-func (c *Cache) request(req message) message {
-	req.response = make(chan message)
-
-	select {
-	case c.req <- req:
-	case <-c.quit:
-		return message{}
+	if o.MaxSize <= 0 {
+		o.MaxSize = DefaultMaxSize
 	}
 
-	return <-req.response
+	if o.SegmentSize <= 0 {
+		o.SegmentSize = DefaultSegmentSize
+	}
+
+	maxItemSize := o.MaxSize / o.maxProcs
+	maxItemSize -= maxItemSize % o.SegmentSize
+
+	c := make([]*cache, o.maxProcs)
+	for i := range c {
+		c[i] = newCache(maxItemSize/o.SegmentSize, o.SegmentSize)
+	}
+
+	return &Cache{
+		options:     o,
+		maxItemSize: maxItemSize,
+		cache:       c,
+	}
 }
 
-// Get retrieves a reader to a cached item from the cache. The second
-// return argument indicates if the item was found in the cache. Get
-// returns reader to the item if it was set, even if the writing its was
-// not yet finished, and it can be used anytime to read from it. The
-// reader blocks if the read reaches the point that the writer didn't
-// pass yet. The reader returns ErrCacheClosed if the cache was closed
-// and ErrItemDiscarded if the original item with the given keyspace and
-// key is not available anymore.
-func (c *Cache) Get(keyspace, key string) (io.Reader, bool) {
-	rsp := c.request(message{typ: getMsg, keyspace: keyspace, key: key})
-	return rsp.io, rsp.ok
+func (c *Cache) hash(key string) uint64 {
+	h := c.options.hashing()
+	h.Write([]byte(key))
+	return h.Sum64()
 }
 
-// GetBytes retrieves a cached item from the cache. The second return
-// argument indicates if the item was found in the cache. It is safe to
-// modify the received byte slice, it won't change the cached data.
+func (c *Cache) getCache(hash uint64) *cache {
+	// TODO: >> 32 for the fnv last byte thing, but not sure about it, needs testing of distribution
+	return c.cache[int(hash>>32)%len(c.cache)]
+}
+
+func (c *Cache) copy(to io.Writer, from io.Reader) (int64, error) {
+	return io.CopyBuffer(to, from, make([]byte, c.options.SegmentSize))
+}
+
+// Get retrieves a reader to an item in the cache. The second return argument indicates if the item was
+// found. Reading can start before writing to the item was finished. The reader blocks if the read reaches the point that
+// the writer didn't pass yet. If the write finished, and the reader reaches the end of the item, EOF is
+// returned. The reader returns ErrCacheClosed if the cache was closed and ErrItemDiscarded if
+// the original item with the given keyspace and key is not available anymore. The reader must be closed.
+func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
+	h := c.hash(key)
+	ci := c.getCache(h)
+
+	ci.mx.Lock()
+	defer ci.mx.Unlock()
+
+	if e, ok := ci.get(id{hash: h, keyspace: keyspace, key: key}); ok {
+		ci.status.incReaders(keyspace)
+		return newReader(ci, e, c.options.SegmentSize), true
+	}
+
+	return nil, false
+}
+
+// GetKey checks if a key is in the cache.
+func (c *Cache) GetKey(keyspace, key string) bool {
+	if r, exists := c.Get(keyspace, key); exists {
+		r.Close()
+		return true
+	}
+
+	return false
+}
+
+// GetBytes retrieves an item from the cache with a key. If found, the second
+// return argument will be true, otherwise false.
+//
+// Equivalent to get and copy to end, so it blocks until write finished.
 func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 	r, ok := c.Get(keyspace, key)
 	if !ok {
 		return nil, false
 	}
 
+	defer r.Close()
+
 	b := bytes.NewBuffer(nil)
-	io.Copy(b, r)
-	return b.Bytes(), true
+	_, err := c.copy(b, r)
+	return b.Bytes(), err == nil
 }
 
-// Set allocates a cache item in the cache and returns a writer that can
-// be used to store the assocated data. The writer returns
-// ErrCacheClosed if the cache was closed, ErrItemDiscarded if the
-// original item with the given keyspace and key is not available
-// anymore, and ErrWriteLimit if the passed in buffer is larger than the
-// allocated space minus the current write position.
-func (c *Cache) Set(keyspace, key string, size int, ttl time.Duration) io.Writer {
-	rsp := c.request(message{typ: setMsg, keyspace: keyspace, key: key, size: size, ttl: ttl})
-	if rsp.io == nil {
-		rsp.io = discardedIO
+func setItem(c *cache, id id, ttl time.Duration) (*entry, error) {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+	e, err := c.set(id, ttl)
+	if err != nil {
+		c.status.incWriters(id.keyspace)
 	}
 
-	return rsp.io
+	return e, err
 }
 
-// SetBytes sets a new item or overwrites an existing one in the cache.
-// It is safe to modify used byte slice after set, it won't change the
-// cached data.
-func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) {
-	w := c.Set(keyspace, key, len(data), ttl)
+// Set creates a cache item and returns a writer that can be used to store the assocated data.
+// The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
+// reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
+func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
+	if len(key) > c.maxItemSize {
+		return nil, false
+	}
+
+	h := c.hash(key)
+	ci := c.getCache(h)
+	id := id{hash: h, keyspace: keyspace, key: key}
+
+	for {
+		if e, err := setItem(ci, id, ttl); err == errAllocationFailed {
+			ci.waitRead()
+		} else if err != nil {
+			return nil, false
+		} else {
+			return newWriter(ci, e), true
+		}
+	}
+}
+
+// SetKey sets only a key without data.
+func (c *Cache) SetKey(keyspace, key string, ttl time.Duration) bool {
+	if w, ok := c.Set(keyspace, key, ttl); ok {
+		err := w.Close()
+		return err == nil
+	}
+
+	return false
+}
+
+// SetBytes sets an item in the cache with a key.
+func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) bool {
+	w, ok := c.Set(keyspace, key, ttl)
+	if !ok {
+		return false
+	}
+
+	defer w.Close()
+
 	b := bytes.NewBuffer(data)
-	io.Copy(w, b)
+	_, err := c.copy(w, b)
+	return err == nil
 }
 
-// Del removes an item from the cache.
+// Del deletes an item from the cache with a key.
 func (c *Cache) Del(keyspace, key string) {
-	c.request(message{typ: delMsg, keyspace: keyspace, key: key})
+	h := c.hash(key)
+	ci := c.getCache(h)
+	id := id{hash: h, keyspace: keyspace, key: key}
+
+	ci.mx.Lock()
+	defer ci.mx.Unlock()
+	ci.del(id)
 }
 
-// StatusOf returns information about a keyspace.
-func (c *Cache) StatusOf(keyspace string) Size {
-	rsp := c.request(message{typ: statusMsg, keyspace: keyspace})
-	return rsp.keyspaceStatus
+// Status returns statistics about the cache state.
+func (c *Cache) Status() *CacheStatus {
+	s := make([]*InstanceStatus, 0, len(c.cache))
+	for _, ci := range c.cache {
+		s = append(s, ci.status)
+	}
+
+	return newCacheStatus(s)
 }
 
-// Status returns information about the cache.
-func (c *Cache) Status() *Status {
-	rsp := c.request(message{typ: cacheStatusMsg})
-	return rsp.status
-}
-
-// Close releases the resources of the cache.
+// Close shuts down the cache and releases resources.
 func (c *Cache) Close() {
-	select {
-	case <-c.quit:
-	default:
-		close(c.quit)
-		<-c.closed
+	for _, ci := range c.cache {
+		func() {
+			ci.mx.Lock()
+			defer ci.mx.Unlock()
+			ci.close()
+		}()
 	}
 }
+
+// NewSingleSpace is like New() but initializes a cache that doesn't use
+// keyspaces.
+func NewSingleSpace(o Options) *SingleSpace {
+	return &SingleSpace{cache: New(o)}
+}
+
+// Get is like Cache.Get without keyspaces.
+func (s *SingleSpace) Get(key string) (io.ReadCloser, bool) {
+	return s.cache.Get("", key)
+}
+
+// GetKey is like Cache.GetKey without keyspaces.
+func (s *SingleSpace) GetKey(key string) bool {
+	return s.cache.GetKey("", key)
+}
+
+// GetBytes is like Cache.GetBytes without keyspaces.
+func (s *SingleSpace) GetBytes(key string) ([]byte, bool) {
+	return s.cache.GetBytes("", key)
+}
+
+// Set is like Cache.Set without keyspaces.
+func (s *SingleSpace) Set(key string, ttl time.Duration) (io.WriteCloser, bool) {
+	return s.cache.Set("", key, ttl)
+}
+
+// SetKey is like Cache.SetKey without keyspaces.
+func (s *SingleSpace) SetKey(key string, ttl time.Duration) bool {
+	return s.cache.SetKey("", key, ttl)
+}
+
+// SetBytes is like Cache.SetBytes without keyspaces.
+func (s *SingleSpace) SetBytes(key string, data []byte, ttl time.Duration) bool {
+	return s.cache.SetBytes("", key, data, ttl)
+}
+
+// Del is like Cache.Del without keyspaces.
+func (s *SingleSpace) Del(key string) {
+	s.cache.Del("", key)
+}
+
+// Close shuts down the cache and releases resource.
+func (s *SingleSpace) Close() { s.cache.Close() }
+
+// status, notifications
+// refactor tests with documentation, examples, more stochastic io tests (buffer sizes, segment borders)
+// - list for buckets
+// - list of lists for lru round robin
+// - what's the cost of having keyspaces in the notification statuses, what's the benefit?
+// hash collision stats
+// fuzzy testing
+// scenario testing
+// why the drop at 100k items
+// expvar package
+
+// once possible, make an http comparison

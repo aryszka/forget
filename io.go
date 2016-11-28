@@ -1,98 +1,205 @@
 package forget
 
-import "errors"
-
-type ioMessageType int
-
-const (
-	readMsg ioMessageType = iota
-	writeMsg
+import (
+	"errors"
+	"io"
+	"sync"
 )
 
-type ioMessage struct {
-	typ      ioMessageType
-	entry    *entry
-	offset   int
-	buffer   []byte
-	response chan<- ioMessage
-	count    int
-	err      error
-	wait     chan<- struct{}
+type rwLocker interface {
+	sync.Locker
+	RLock()
+	RUnlock()
 }
 
-type rw struct {
-	req    chan<- ioMessage
-	entry  *entry
-	offset int
-	quit   chan struct{}
+type cio struct {
+	cache *cache
+	entry *entry
 }
 
-type discarded struct{}
+type reader struct {
+	*cio
+	currentSegment               node
+	segmentSize, segmentPosition int
+}
+
+type writer struct {
+	*cio
+	max, size int
+}
 
 var (
-	// ErrCacheClosed is returned when the cache gets closed while
-	// reading or writing from a cached item.
-	ErrCacheClosed = errors.New("cache closed")
-
-	// ErrItemDiscarded is returned when an item gets deleted,
-	// overwritten or evicted from the cache while reading or writing to
-	// it.
+	// ErrItemDiscarded is returned by IO operations when an item has been discarded, e.g. evicted, deleted or the discarded
+	// due to the cache was closed.
 	ErrItemDiscarded = errors.New("item discarded")
 
-	// ErrWriteLimit is returned when trying to write more data to a
-	// cached item than the space that was allocated for it.
+	// ErrWriteLimit is returned when writing to an item fills the available size.
 	ErrWriteLimit = errors.New("write limit")
+
+	// ErrReaderClosed is returned when reading from or closing a reader that was already closed before.
+	ErrReaderClosed = errors.New("writer closed")
+
+	// ErrWriterClosed is returned when writing to or closing a writer that was already closed before.
+	ErrWriterClosed = errors.New("writer closed")
 )
 
-var discardedIO = discarded{}
+func newReader(c *cache, e *entry, segmentSize int) *reader {
+	return &reader{
+		cio:             &cio{cache: c, entry: e},
+		segmentSize:     segmentSize,
+		currentSegment:  e.firstSegment,
+		segmentPosition: e.keySize,
+	}
+}
 
-func (rw *rw) Read(p []byte) (int, error) {
-	for {
-		rsp := make(chan ioMessage)
-		wait := make(chan struct{})
+func (r *reader) readOne(p []byte) (int, error) {
+	r.cache.mx.RLock()
+	defer r.cache.mx.RUnlock()
 
-		select {
-		case rw.req <- ioMessage{
-			typ:      readMsg,
-			entry:    rw.entry,
-			offset:   rw.offset,
-			buffer:   p,
-			response: rsp,
-			wait:     wait,
-		}:
-		case <-rw.quit:
-			return 0, ErrCacheClosed
-		}
+	if r.entry == nil {
+		return 0, ErrReaderClosed
+	}
 
-		m := <-rsp
-		rw.offset += m.count
-		if m.count == 0 && m.err == nil {
-			select {
-			case <-wait:
-			case <-rw.quit:
-				return 0, ErrCacheClosed
+	if r.entry.discarded {
+		return 0, ErrItemDiscarded
+	}
+
+	if r.currentSegment != r.entry.lastSegment && r.segmentPosition == r.segmentSize {
+		r.currentSegment = r.currentSegment.next()
+		r.segmentPosition = 0
+	}
+
+	if r.currentSegment == r.entry.lastSegment &&
+		r.segmentPosition+len(p) > r.entry.segmentPosition {
+
+		p = p[:r.entry.segmentPosition-r.segmentPosition]
+		if len(p) == 0 {
+			if r.entry.writeComplete {
+				return 0, io.EOF
 			}
 
-			continue
+			return 0, nil
+		}
+	}
+
+	n := r.currentSegment.(*segment).read(r.segmentPosition, p)
+	r.segmentPosition += n
+	return n, nil
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	var count int
+	for len(p) > 0 {
+		n, err := r.readOne(p)
+		p = p[n:]
+		count += n
+
+		if err != nil || n == 0 && count > 0 {
+			return count, err
 		}
 
-		return m.count, m.err
+		if n == 0 {
+			r.entry.waitWrite()
+		}
+	}
+
+	return count, nil
+}
+
+func (r *reader) Close() error {
+	r.cache.mx.Lock()
+	defer r.cache.broadcastRead()
+	defer r.cache.mx.Unlock()
+
+	if r.entry == nil {
+		return ErrReaderClosed
+	}
+
+	r.cache.status.decReaders(r.entry.keyspace)
+
+	r.entry.reading--
+	r.entry = nil
+	r.currentSegment = nil
+
+	return nil
+}
+
+func newWriter(c *cache, e *entry) *writer {
+	return &writer{
+		cio: &cio{cache: c, entry: e},
+		max: c.segmentCount*c.segmentSize - e.keySize,
 	}
 }
 
-func (rw *rw) Write(p []byte) (int, error) {
-	rsp := make(chan ioMessage)
+func (w *writer) writeOne(p []byte, unblock bool) (int, error) {
+	w.cache.mx.Lock()
+	defer w.entry.broadcastWrite()
+	defer w.cache.mx.Unlock()
 
-	select {
-	case rw.req <- ioMessage{typ: writeMsg, entry: rw.entry, offset: rw.offset, buffer: p, response: rsp}:
-	case <-rw.quit:
-		return 0, ErrCacheClosed
+	// only for statistics
+	if unblock {
+		w.cache.status.decWritersBlocked(w.entry.keyspace)
 	}
 
-	m := <-rsp
-	rw.offset += m.count
-	return m.count, m.err
+	if w.entry.writeComplete {
+		return 0, ErrWriterClosed
+	}
+
+	n, err := w.entry.write(p)
+	if n == len(p) || err != nil {
+		return n, err
+	}
+
+	err = w.cache.allocateFor(w.entry)
+	if err != nil {
+		w.cache.status.incWritersBlocked(w.entry.keyspace)
+	}
+
+	return n, err
 }
 
-func (d discarded) Read([]byte) (int, error)  { return 0, ErrItemDiscarded }
-func (d discarded) Write([]byte) (int, error) { return 0, ErrItemDiscarded }
+func (w *writer) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	var (
+		blocked bool
+		count   int
+	)
+	for len(p) > 0 {
+		n, err := w.writeOne(p, blocked)
+		p = p[n:]
+		count += n
+		w.size += n
+
+		if err != nil && err != errAllocationFailed {
+			return count, err
+		}
+
+		if len(p) > 0 && w.size == w.max {
+			return count, ErrWriteLimit
+		}
+
+		if err == errAllocationFailed {
+			blocked = true
+			w.cache.waitRead()
+		}
+	}
+
+	return count, nil
+}
+
+func (w *writer) Close() error {
+	w.cache.mx.Lock()
+	defer w.entry.broadcastWrite()
+	defer w.cache.mx.Unlock()
+
+	if w.entry.writeComplete {
+		return ErrWriterClosed
+	}
+
+	w.entry.writeComplete = true
+	w.cache.status.decWriters(w.entry.keyspace)
+	return nil
+}
