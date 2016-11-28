@@ -115,11 +115,7 @@ func (r *reader) Close() error {
 		return ErrReaderClosed
 	}
 
-	r.cache.status.Total.Readers--
-	r.cache.setKeyspaceStatus(r.entry.keyspace, func(s *Status) *Status {
-		s.Readers--
-		return s
-	})
+	r.cache.status.decReaders(r.entry.keyspace)
 
 	r.entry.reading--
 	r.entry = nil
@@ -142,15 +138,7 @@ func (w *writer) writeOne(p []byte, unblock bool) (int, error) {
 
 	// only for statistics
 	if unblock {
-		w.cache.status.Total.WritersBlocked--
-		w.cache.setKeyspaceStatus(w.entry.keyspace, func(s *Status) *Status {
-			if s == nil {
-				return s
-			}
-
-			s.WritersBlocked--
-			return s
-		})
+		w.cache.status.decWritersBlocked(w.entry.keyspace)
 	}
 
 	if w.entry.writeComplete {
@@ -164,11 +152,7 @@ func (w *writer) writeOne(p []byte, unblock bool) (int, error) {
 
 	err = w.cache.allocateFor(w.entry)
 	if err != nil {
-		w.cache.status.Total.WritersBlocked++
-		w.cache.setKeyspaceStatus(w.entry.keyspace, func(s *Status) *Status {
-			s.WritersBlocked++
-			return s
-		})
+		w.cache.status.incWritersBlocked(w.entry.keyspace)
 	}
 
 	return n, err
@@ -216,16 +200,6 @@ func (w *writer) Close() error {
 	}
 
 	w.entry.writeComplete = true
-
-	w.cache.status.Total.Writers--
-	w.cache.setKeyspaceStatus(w.entry.keyspace, func(s *Status) *Status {
-		if s == nil {
-			return nil
-		}
-
-		s.Writers--
-		return s
-	})
-
+	w.cache.status.decWriters(w.entry.keyspace)
 	return nil
 }

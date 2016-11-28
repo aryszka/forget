@@ -3,6 +3,7 @@ package forget
 import (
 	"bytes"
 	"io"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -1312,5 +1313,42 @@ func TestCloseReader(t *testing.T) {
 	if err := r.Close(); err != ErrReaderClosed {
 		t.Error("failed to return the right error", err)
 		return
+	}
+}
+
+func TestNoMoreInstancesThanMaxProcs(t *testing.T) {
+	if runtime.NumCPU() < 2 {
+		t.Skip()
+	}
+
+	gmp := runtime.GOMAXPROCS(-1)
+	defer runtime.GOMAXPROCS(gmp)
+
+	runtime.GOMAXPROCS(runtime.NumCPU() / 2)
+
+	c := New(Options{})
+	defer c.Close()
+
+	if len(c.cache) != runtime.GOMAXPROCS(-1) {
+		t.Error("failed to set the instance count to GOMAXPROCS")
+	}
+}
+
+func TestStatus(t *testing.T) {
+	c := initTestCache(testInit{
+		"s1": testKeyspace{
+			"foo": []byte{1, 2, 3},
+			"bar": []byte{4, 5, 6},
+		},
+		"s2": testKeyspace{
+			"baz": []byte{7, 8, 9},
+			"qux": []byte{0, 1, 2},
+		},
+	})
+	defer c.Close()
+
+	s := c.Status()
+	if s.AvailableMemory != (1<<9)-4*(1<<6) {
+		t.Error("invalid status")
 	}
 }

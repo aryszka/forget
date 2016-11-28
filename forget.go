@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+const (
+	// DefaultMaxSize is used when MaxSize is not specified in the initial Options.
+	DefaultMaxSize = 1 << 30
+
+	// DefaultSegmentSize is used when SegmentSize is not specified in the initial Options.
+	DefaultSegmentSize = 1 << 15
+)
+
 // Options objects are used to pass in parameters to new Cache instances.
 type Options struct {
 
@@ -46,6 +54,14 @@ func New(o Options) *Cache {
 		if o.maxProcs > runtime.GOMAXPROCS(-1) {
 			o.maxProcs = runtime.GOMAXPROCS(-1)
 		}
+	}
+
+	if o.MaxSize <= 0 {
+		o.MaxSize = DefaultMaxSize
+	}
+
+	if o.SegmentSize <= 0 {
+		o.SegmentSize = DefaultSegmentSize
 	}
 
 	maxItemSize := o.MaxSize / o.maxProcs
@@ -91,11 +107,7 @@ func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 	defer ci.mx.Unlock()
 
 	if e, ok := ci.get(id{hash: h, keyspace: keyspace, key: key}); ok {
-		ci.status.Total.Readers++
-		ci.setKeyspaceStatus(keyspace, func(s *Status) *Status {
-			s.Readers++
-			return s
-		})
+		ci.status.incReaders(keyspace)
 		return newReader(ci, e, c.options.SegmentSize), true
 	}
 
@@ -134,11 +146,7 @@ func setItem(c *cache, id id, ttl time.Duration) (*entry, error) {
 	defer c.mx.Unlock()
 	e, err := c.set(id, ttl)
 	if err != nil {
-		c.status.Total.Writers++
-		c.setKeyspaceStatus(id.keyspace, func(s *Status) *Status {
-			s.Writers++
-			return s
-		})
+		c.status.incWriters(id.keyspace)
 	}
 
 	return e, err
@@ -202,6 +210,16 @@ func (c *Cache) Del(keyspace, key string) {
 	ci.del(id)
 }
 
+// Status returns statistics about the cache state.
+func (c *Cache) Status() *CacheStatus {
+	s := make([]*InstanceStatus, 0, len(c.cache))
+	for _, ci := range c.cache {
+		s = append(s, ci.status)
+	}
+
+	return newCacheStatus(s)
+}
+
 // Close shuts down the cache and releases resources.
 func (c *Cache) Close() {
 	for _, ci := range c.cache {
@@ -260,5 +278,6 @@ func (s *SingleSpace) Close() { s.cache.Close() }
 // status, notifications
 // refactor tests with documentation, examples, more stochastic io tests (buffer sizes, segment borders)
 // fuzzy testing
+// why the drop at 100k items
 
 // once possible, make an http comparison
