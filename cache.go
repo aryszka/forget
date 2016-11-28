@@ -22,6 +22,7 @@ type cache struct {
 	allLRU                               []*list
 	hash                                 [][]*entry
 	closed                               bool
+	status                               *InstanceStatus
 }
 
 var (
@@ -41,6 +42,12 @@ func newCache(segmentCount, segmentSize int) *cache {
 		lru:          make(map[string]*list),
 		toDelete:     new(list),
 		hash:         make([][]*entry, segmentCount), // there cannot be more entries than segments
+
+		status: &InstanceStatus{
+			Total:           new(Status),
+			AvailableMemory: segmentCount * segmentSize,
+			Keyspaces:       make(map[string]*Status),
+		},
 	}
 }
 
@@ -159,6 +166,7 @@ func (c *cache) keyspaceLRU(keyspace string) *list {
 		lru = new(list)
 		c.lru[keyspace] = lru
 		c.allLRU = append(c.allLRU, lru)
+		c.status.Keyspaces[keyspace] = new(Status)
 	}
 
 	return lru
@@ -181,6 +189,10 @@ func (c *cache) deleteLookup(e *entry) bool {
 	return false
 }
 
+func (c *cache) setKeyspaceStatus(keyspace string, f func(*Status) *Status) {
+	c.status.Keyspaces[keyspace] = f(c.status.Keyspaces[keyspace])
+}
+
 func (c *cache) deleteEntry(e *entry) bool {
 	if c.deleteLookup(e) {
 		lru := c.lru[e.keyspace]
@@ -191,6 +203,11 @@ func (c *cache) deleteEntry(e *entry) bool {
 
 		if e.reading > 0 {
 			c.toDelete.insert(e, nil)
+			c.status.Total.ReadersOnDeleted++
+			c.setKeyspaceStatus(e.keyspace, func(s *Status) *Status {
+				s.ReadersOnDeleted++
+				return s
+			})
 			return false
 		}
 	} else {
@@ -199,6 +216,11 @@ func (c *cache) deleteEntry(e *entry) bool {
 		}
 
 		c.toDelete.remove(e)
+		c.status.Total.ReadersOnDeleted--
+		c.setKeyspaceStatus(e.keyspace, func(s *Status) *Status {
+			s.ReadersOnDeleted--
+			return s
+		})
 	}
 
 	first, last := e.data()
@@ -207,6 +229,7 @@ func (c *cache) deleteEntry(e *entry) bool {
 	}
 
 	e.close()
+	c.itemDeleted(e)
 	return true
 }
 
@@ -245,6 +268,7 @@ func (c *cache) set(id id, ttl time.Duration) (*entry, error) {
 	lru := c.keyspaceLRU(e.keyspace)
 	lru.insert(e, nil)
 	c.addLookup(id, e)
+	c.itemAdded(e)
 
 	return e, nil
 }
@@ -267,6 +291,37 @@ func (c *cache) waitRead() {
 
 func (c *cache) broadcastRead() {
 	c.readCond.Broadcast()
+}
+
+func (c *cache) updateStatus(e *entry, mod int) {
+	usedSize := (e.size / c.segmentSize) * c.segmentSize
+	if e.size%c.segmentSize > 0 {
+		usedSize += c.segmentSize
+	}
+
+	size := e.size * mod
+	usedSize *= mod
+
+	c.status.Total.ItemCount += mod
+	c.status.Total.EffectiveSize += size
+	c.status.Total.UsedSize += usedSize
+	c.status.AvailableMemory -= usedSize
+
+	c.setKeyspaceStatus(e.keyspace, func(s *Status) *Status {
+		s.ItemCount += mod
+		s.EffectiveSize += size
+		s.UsedSize += usedSize
+		return s
+	})
+}
+
+func (c *cache) itemAdded(e *entry) { c.updateStatus(e, 1) }
+
+func (c *cache) itemDeleted(e *entry) {
+	c.updateStatus(e, -1)
+	if c.status.Keyspaces[e.keyspace].ItemCount == 0 {
+		delete(c.status.Keyspaces, e.keyspace)
+	}
 }
 
 func (c *cache) closeAll(l *list) {

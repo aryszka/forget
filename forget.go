@@ -42,7 +42,10 @@ func New(o Options) *Cache {
 	}
 
 	if o.maxProcs <= 0 {
-		o.maxProcs = runtime.GOMAXPROCS(-1)
+		o.maxProcs = runtime.NumCPU()
+		if o.maxProcs > runtime.GOMAXPROCS(-1) {
+			o.maxProcs = runtime.GOMAXPROCS(-1)
+		}
 	}
 
 	maxItemSize := o.MaxSize / o.maxProcs
@@ -88,6 +91,11 @@ func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 	defer ci.mx.Unlock()
 
 	if e, ok := ci.get(id{hash: h, keyspace: keyspace, key: key}); ok {
+		ci.status.Total.Readers++
+		ci.setKeyspaceStatus(keyspace, func(s *Status) *Status {
+			s.Readers++
+			return s
+		})
 		return newReader(ci, e, c.options.SegmentSize), true
 	}
 
@@ -124,7 +132,16 @@ func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 func setItem(c *cache, id id, ttl time.Duration) (*entry, error) {
 	c.mx.Lock()
 	defer c.mx.Unlock()
-	return c.set(id, ttl)
+	e, err := c.set(id, ttl)
+	if err != nil {
+		c.status.Total.Writers++
+		c.setKeyspaceStatus(id.keyspace, func(s *Status) *Status {
+			s.Writers++
+			return s
+		})
+	}
+
+	return e, err
 }
 
 // Set creates a cache item and returns a writer that can be used to store the assocated data.
@@ -141,9 +158,7 @@ func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bo
 
 	for {
 		if e, err := setItem(ci, id, ttl); err == errAllocationFailed {
-			ci.readCond.L.Lock()
-			ci.readCond.Wait()
-			ci.readCond.L.Unlock()
+			ci.waitRead()
 		} else if err != nil {
 			return nil, false
 		} else {

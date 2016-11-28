@@ -8,7 +8,7 @@ import (
 type entry struct {
 	hash                      uint64
 	keyspace                  string
-	keySize                   int
+	keySize, size             int
 	expires                   time.Time
 	segmentPosition, reading  int
 	firstSegment, lastSegment node
@@ -81,6 +81,7 @@ func (e *entry) write(p []byte) (int, error) {
 	}
 
 	n := e.lastSegment.(*segment).write(e.segmentPosition, p)
+	e.size += n
 	e.segmentPosition += n
 
 	return n, nil

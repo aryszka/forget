@@ -167,25 +167,25 @@ func BenchmarkSet_TwoCores_100000(b *testing.B) {
 }
 
 func BenchmarkGet_AllCores_100000(b *testing.B) {
-	benchmarkRange(b, runtime.GOMAXPROCS(-1), 100000, newForget, executeKey(executeGet))
+	benchmarkRange(b, runtime.NumCPU(), 100000, newForget, executeKey(executeGet))
 }
 
 func BenchmarkSet_AllCores_100000(b *testing.B) {
-	benchmarkRange(b, runtime.GOMAXPROCS(-1), 100000, newForget, executeKey(executeSet))
+	benchmarkRange(b, runtime.NumCPU(), 100000, newForget, executeKey(executeSet))
 }
 
 func BenchmarkGet_AllCores_1000(b *testing.B) {
-	benchmarkRange(b, runtime.GOMAXPROCS(-1), 1000, newForget, executeKey(executeGet))
+	benchmarkRange(b, runtime.NumCPU(), 1000, newForget, executeKey(executeGet))
 }
 
 func BenchmarkSet_AllCores_1000(b *testing.B) {
-	benchmarkRange(b, runtime.GOMAXPROCS(-1), 1000, newForget, executeKey(executeSet))
+	benchmarkRange(b, runtime.NumCPU(), 1000, newForget, executeKey(executeSet))
 }
 
 func BenchmarkGet_AllCores_10(b *testing.B) {
-	benchmarkRange(b, runtime.GOMAXPROCS(-1), 10, newForget, executeKey(executeGet))
+	benchmarkRange(b, runtime.NumCPU(), 10, newForget, executeKey(executeGet))
 }
 
 func BenchmarkSet_AllCores_10(b *testing.B) {
-	benchmarkRange(b, runtime.GOMAXPROCS(-1), 10, newForget, executeKey(executeSet))
+	benchmarkRange(b, runtime.NumCPU(), 10, newForget, executeKey(executeSet))
 }

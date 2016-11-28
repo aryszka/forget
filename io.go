@@ -115,9 +115,16 @@ func (r *reader) Close() error {
 		return ErrReaderClosed
 	}
 
+	r.cache.status.Total.Readers--
+	r.cache.setKeyspaceStatus(r.entry.keyspace, func(s *Status) *Status {
+		s.Readers--
+		return s
+	})
+
 	r.entry.reading--
 	r.entry = nil
 	r.currentSegment = nil
+
 	return nil
 }
 
@@ -128,10 +135,23 @@ func newWriter(c *cache, e *entry) *writer {
 	}
 }
 
-func (w *writer) writeOne(p []byte) (int, error) {
+func (w *writer) writeOne(p []byte, unblock bool) (int, error) {
 	w.cache.mx.Lock()
 	defer w.entry.broadcastWrite()
 	defer w.cache.mx.Unlock()
+
+	// only for statistics
+	if unblock {
+		w.cache.status.Total.WritersBlocked--
+		w.cache.setKeyspaceStatus(w.entry.keyspace, func(s *Status) *Status {
+			if s == nil {
+				return s
+			}
+
+			s.WritersBlocked--
+			return s
+		})
+	}
 
 	if w.entry.writeComplete {
 		return 0, ErrWriterClosed
@@ -143,6 +163,14 @@ func (w *writer) writeOne(p []byte) (int, error) {
 	}
 
 	err = w.cache.allocateFor(w.entry)
+	if err != nil {
+		w.cache.status.Total.WritersBlocked++
+		w.cache.setKeyspaceStatus(w.entry.keyspace, func(s *Status) *Status {
+			s.WritersBlocked++
+			return s
+		})
+	}
+
 	return n, err
 }
 
@@ -151,9 +179,12 @@ func (w *writer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	var count int
+	var (
+		blocked bool
+		count   int
+	)
 	for len(p) > 0 {
-		n, err := w.writeOne(p)
+		n, err := w.writeOne(p, blocked)
 		p = p[n:]
 		count += n
 		w.size += n
@@ -167,6 +198,7 @@ func (w *writer) Write(p []byte) (int, error) {
 		}
 
 		if err == errAllocationFailed {
+			blocked = true
 			w.cache.waitRead()
 		}
 	}
@@ -184,5 +216,16 @@ func (w *writer) Close() error {
 	}
 
 	w.entry.writeComplete = true
+
+	w.cache.status.Total.Writers--
+	w.cache.setKeyspaceStatus(w.entry.keyspace, func(s *Status) *Status {
+		if s == nil {
+			return nil
+		}
+
+		s.Writers--
+		return s
+	})
+
 	return nil
 }
