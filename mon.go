@@ -75,12 +75,24 @@ type Event struct {
 }
 
 type notify struct {
-	mask     EventType
-	listener chan<- *Event
+	mask           EventType
+	listener       chan<- *Event
+	instanceStatus *InstanceStatus
+	instanceIndex  int
 }
 
 type demuxNotify struct {
 	listener chan<- *Event
+}
+
+func usedSize(size, segmentOffset, segmentSize int) int {
+	size += segmentOffset
+	usedSize := (size / segmentSize) * segmentSize
+	if size%segmentSize > 0 {
+		usedSize += segmentSize
+	}
+
+	return usedSize
 }
 
 func (s *Status) add(d *Status) {
@@ -103,13 +115,8 @@ func newInstanceStatus(segmentSize, availableMemory int) *InstanceStatus {
 }
 
 func (s *InstanceStatus) updateStatus(e *entry, mod int) {
-	usedSize := (e.size / s.segmentSize) * s.segmentSize
-	if e.size%s.segmentSize > 0 {
-		usedSize += s.segmentSize
-	}
-
 	size := e.size * mod
-	usedSize *= mod
+	usedSize := usedSize(e.size, 0, s.segmentSize) * mod
 
 	s.Total.ItemCount += mod
 	s.Total.EffectiveSize += size
@@ -214,3 +221,64 @@ func newCacheStatus(i []*InstanceStatus) *CacheStatus {
 
 	return s
 }
+
+func (n *notify) send(e *Event) {
+	if n.mask&e.Type == 0 {
+		return
+	}
+
+	e.instanceStatus = n.instanceStatus.clone()
+	e.instanceIndex = n.instanceIndex
+
+	n.listener <- e
+}
+
+func (n *notify) hit(keyspace, key string) {
+	n.send(&Event{
+		Type:     Hit,
+		Keyspace: keyspace,
+		Key:      key,
+	})
+}
+
+func (n *notify) miss(keyspace, key string) {
+	n.send(&Event{
+		Type:     Miss,
+		Keyspace: keyspace,
+		Key:      key,
+	})
+}
+
+func (n *notify) set(keyspace, key string, keySize int) {
+	n.send(&Event{
+		Type:                Set,
+		Keyspace:            keyspace,
+		Key:                 key,
+		EffectiveSizeChange: keySize,
+		UsedSizeChange:      usedSize(keySize, 0, n.instanceStatus.segmentSize),
+	})
+}
+
+// Delete, Expire, Evict: how to deal with the busy readers
+// Shall we notify reader busy and writer blocked
+
+// // Delete events are sent when a cache item was deleted (explicitly calling Del()).
+// Delete
+
+// // Expire events are sent when a cache item was detected to be expired.
+// Expire
+
+// // Evict events are sent when a cache item was evicted from the cache.
+// Evict
+
+// // AllocFailed events are sent when allocation for a new item or when writing to an item couldn't complete.
+// AllocFailed
+
+// // Normal mask for receiving moderate level of notifications.
+// Normal = Evict | AllocFailed
+
+// // Verbose mask for receiving verbose level of notifications.
+// Verbose = Miss | Normal
+
+// // All mask for receiving all possible notifications.
+// All = Hit | Set | Delete | Expire | Verbose

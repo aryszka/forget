@@ -277,7 +277,13 @@ func (s *SingleSpace) Close() { s.cache.Close() }
 
 // status, notifications
 // refactor tests with documentation, examples, more stochastic io tests (buffer sizes, segment borders)
+// - list for buckets
+// - list of lists for lru round robin
+// - what's the cost of having keyspaces in the notification statuses, what's the benefit?
+// hash collision stats
 // fuzzy testing
+// scenario testing
 // why the drop at 100k items
+// expvar package
 
 // once possible, make an http comparison
