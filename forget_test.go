@@ -1352,3 +1352,70 @@ func TestStatus(t *testing.T) {
 		t.Error("invalid status")
 	}
 }
+
+func TestNotifications(t *testing.T) {
+	receive := func(t *testing.T, n <-chan *Event, expect EventType) {
+		if e := <-n; e.Type != expect {
+			t.Errorf("failed to receive the expected event. Got: %s, expected: %s.\n", e.Type, expect)
+		}
+	}
+
+	run := func(msg string, expect EventType, f ...func(c *Cache)) {
+		t.Run(msg, func(t *testing.T) {
+			n := make(chan *Event, 4)
+
+			c := New(Options{MaxSize: 6, SegmentSize: 3, Notify: n, NotifyMask: All})
+			defer c.Close()
+
+			for _, fi := range f[:len(f)-1] {
+				fi(c)
+				<-n
+			}
+
+			f[len(f)-1](c)
+			receive(t, n, expect)
+		})
+	}
+
+	noop := func(*Cache) {}
+
+	run("miss", Miss, func(c *Cache) {
+		c.GetKey("s1", "foo")
+	})
+
+	run("hit", Hit, func(c *Cache) {
+		c.SetKey("s1", "foo", time.Hour)
+	}, noop, func(c *Cache) {
+		c.GetKey("s1", "foo")
+	})
+
+	run("set", Set, func(c *Cache) {
+		c.SetKey("s1", "foo", time.Hour)
+	})
+
+	run("delete", Delete, func(c *Cache) {
+		c.SetKey("s1", "foo", time.Hour)
+	}, noop, func(c *Cache) {
+		c.Del("s1", "foo")
+	})
+
+	run("expire", Expire|Delete|Miss, func(c *Cache) {
+		c.SetKey("s1", "foo", 3*time.Millisecond)
+	}, noop, func(c *Cache) {
+		time.Sleep(12 * time.Millisecond)
+		c.GetKey("s1", "foo")
+	})
+
+	run("evict", Evict|Delete, func(c *Cache) {
+		c.SetKey("s1", "foo", time.Hour)
+	}, noop, func(c *Cache) {
+		c.SetKey("s1", "barbaz", time.Hour)
+	})
+}
+
+func TestEventTypeString(t *testing.T) {
+	all, allPlus := All, (All<<1)+1
+	if all.String() != allPlus.String() {
+		t.Error("failed to stringify event type", all, allPlus)
+	}
+}

@@ -1,31 +1,6 @@
 package forget
 
-// Status objects contain cache statistics about keyspaces, internal cache instances or the complete cache.
-type Status struct {
-	ItemCount        int
-	EffectiveSize    int
-	UsedSize         int
-	Readers          int
-	ReadersOnDeleted int
-	Writers          int
-	WritersBlocked   int
-}
-
-// InstanceStatus objects contain statistics about an internal cache instance.
-type InstanceStatus struct {
-	Total           *Status
-	AvailableMemory int
-	Keyspaces       map[string]*Status
-	segmentSize     int
-}
-
-// CacheStatus objects contain statistics about the cache, including the internal cache instnaces and keyspaces.
-type CacheStatus struct {
-	Total           *Status
-	AvailableMemory int
-	Keyspaces       map[string]*Status
-	Instances       []*InstanceStatus
-}
+import "strings"
 
 // EventType indicates the nature of a notification event. It also can be used to masked which events should
 // cause a notification.
@@ -45,7 +20,10 @@ const (
 	// Delete events are sent when a cache item was deleted (explicitly calling Del()).
 	Delete
 
-	// Expire events are sent when a cache item was detected to be expired.
+	// WriteComplete events are sent when a cache item's write is finished.
+	WriteComplete
+
+	// Expire events are sent when a cache item was detected to be expired. Always together with Miss.
 	Expire
 
 	// Evict events are sent when a cache item was evicted from the cache.
@@ -61,7 +39,7 @@ const (
 	Verbose = Miss | Normal
 
 	// All mask for receiving all possible notifications.
-	All = Hit | Set | Delete | Expire | Verbose
+	All = Hit | Set | Delete | WriteComplete | Expire | Verbose
 )
 
 // Event objects describe the cause of a notification.
@@ -69,30 +47,102 @@ type Event struct {
 	Type                                EventType
 	Keyspace, Key                       string
 	EffectiveSizeChange, UsedSizeChange int
-	Status                              *CacheStatus
-	instanceStatus                      *InstanceStatus
-	instanceIndex                       int
 }
 
 type notify struct {
-	mask           EventType
-	listener       chan<- *Event
-	instanceStatus *InstanceStatus
-	instanceIndex  int
-}
-
-type demuxNotify struct {
+	mask     EventType
 	listener chan<- *Event
 }
 
-func usedSize(size, segmentOffset, segmentSize int) int {
-	size += segmentOffset
+// Status objects contain cache statistics about keyspaces, internal cache instances or the complete cache.
+type Status struct {
+	ItemCount        int
+	EffectiveSize    int
+	UsedSize         int
+	Readers          int
+	ReadersOnDeleted int
+	Writers          int
+	WritersBlocked   int
+}
+
+// InstanceStatus objects contain statistics about an internal cache instance.
+type InstanceStatus struct {
+	Total           *Status
+	AvailableMemory int
+	Keyspaces       map[string]*Status
+	segmentSize     int
+	notify          *notify
+}
+
+// CacheStatus objects contain statistics about the cache, including the internal cache instnaces and keyspaces.
+type CacheStatus struct {
+	Total           *Status
+	AvailableMemory int
+	Keyspaces       map[string]*Status
+	Instances       []*InstanceStatus
+}
+
+func (et EventType) String() string {
+	switch et {
+	case Hit:
+		return "hit"
+	case Miss:
+		return "miss"
+	case Set:
+		return "set"
+	case Delete:
+		return "delete"
+	case WriteComplete:
+		return "writecomplete"
+	case Expire:
+		return "expire"
+	case Evict:
+		return "evict"
+	case AllocFailed:
+		return "allocFailed"
+	default:
+		var (
+			s []string
+			p uint
+		)
+
+		et &= All
+		for et > 0 {
+			if et%2 == 1 {
+				s = append(s, EventType(1<<p).String())
+			}
+
+			et >>= 1
+			p++
+		}
+
+		return strings.Join(s, "|")
+	}
+}
+
+func usedSize(size, offset, segmentSize int) int {
+	size += offset % segmentSize
 	usedSize := (size / segmentSize) * segmentSize
 	if size%segmentSize > 0 {
 		usedSize += segmentSize
 	}
 
 	return usedSize
+}
+
+func newNotify(listener chan<- *Event, mask EventType) *notify {
+	return &notify{
+		listener: listener,
+		mask:     mask,
+	}
+}
+
+func (n *notify) send(e *Event) {
+	if n.mask&e.Type == 0 {
+		return
+	}
+
+	n.listener <- e
 }
 
 func (s *Status) add(d *Status) {
@@ -105,13 +155,76 @@ func (s *Status) add(d *Status) {
 	s.WritersBlocked += d.WritersBlocked
 }
 
-func newInstanceStatus(segmentSize, availableMemory int) *InstanceStatus {
+func newInstanceStatus(segmentSize, availableMemory int, n *notify) *InstanceStatus {
 	return &InstanceStatus{
 		Total:           new(Status),
 		AvailableMemory: availableMemory,
 		Keyspaces:       make(map[string]*Status),
 		segmentSize:     segmentSize,
+		notify:          n,
 	}
+}
+
+func (s *InstanceStatus) sendEvent(e *Event) {
+	s.notify.send(e)
+}
+
+func (s *InstanceStatus) hit(keyspace, key string) {
+	s.sendEvent(&Event{
+		Type:     Hit,
+		Keyspace: keyspace,
+		Key:      key,
+	})
+}
+
+func (s *InstanceStatus) miss(keyspace, key string) {
+	s.sendEvent(&Event{
+		Type:     Miss,
+		Keyspace: keyspace,
+		Key:      key,
+	})
+}
+
+func (s *InstanceStatus) set(keyspace, key string, keySize int) {
+	s.sendEvent(&Event{
+		Type:                Set,
+		Keyspace:            keyspace,
+		Key:                 key,
+		EffectiveSizeChange: keySize,
+		UsedSizeChange:      usedSize(keySize, 0, s.segmentSize),
+	})
+}
+
+func (s *InstanceStatus) writeComplete(keyspace string, keySize, contentSize int) {
+	s.sendEvent(&Event{
+		Type:                WriteComplete,
+		Keyspace:            keyspace,
+		EffectiveSizeChange: contentSize,
+		UsedSizeChange:      usedSize(contentSize, keySize, s.segmentSize),
+	})
+}
+
+func (s *InstanceStatus) remove(typ EventType, keyspace, key string, size int) {
+	s.sendEvent(&Event{
+		Type:                typ,
+		Keyspace:            keyspace,
+		Key:                 key,
+		EffectiveSizeChange: -size,
+		UsedSizeChange:      -usedSize(size, 0, s.segmentSize),
+	})
+}
+
+func (s *InstanceStatus) del(keyspace, key string, size int) { s.remove(Delete, keyspace, key, size) }
+func (s *InstanceStatus) expire(keyspace, key string, size int) {
+	s.remove(Expire|Delete|Miss, keyspace, key, size)
+}
+func (s *InstanceStatus) evict(keyspace string, size int) { s.remove(Evict|Delete, keyspace, "", size) }
+
+func (s *InstanceStatus) allocFailed(keyspace string) {
+	s.sendEvent(&Event{
+		Type:     AllocFailed,
+		Keyspace: keyspace,
+	})
 }
 
 func (s *InstanceStatus) updateStatus(e *entry, mod int) {
@@ -221,64 +334,3 @@ func newCacheStatus(i []*InstanceStatus) *CacheStatus {
 
 	return s
 }
-
-func (n *notify) send(e *Event) {
-	if n.mask&e.Type == 0 {
-		return
-	}
-
-	e.instanceStatus = n.instanceStatus.clone()
-	e.instanceIndex = n.instanceIndex
-
-	n.listener <- e
-}
-
-func (n *notify) hit(keyspace, key string) {
-	n.send(&Event{
-		Type:     Hit,
-		Keyspace: keyspace,
-		Key:      key,
-	})
-}
-
-func (n *notify) miss(keyspace, key string) {
-	n.send(&Event{
-		Type:     Miss,
-		Keyspace: keyspace,
-		Key:      key,
-	})
-}
-
-func (n *notify) set(keyspace, key string, keySize int) {
-	n.send(&Event{
-		Type:                Set,
-		Keyspace:            keyspace,
-		Key:                 key,
-		EffectiveSizeChange: keySize,
-		UsedSizeChange:      usedSize(keySize, 0, n.instanceStatus.segmentSize),
-	})
-}
-
-// Delete, Expire, Evict: how to deal with the busy readers
-// Shall we notify reader busy and writer blocked
-
-// // Delete events are sent when a cache item was deleted (explicitly calling Del()).
-// Delete
-
-// // Expire events are sent when a cache item was detected to be expired.
-// Expire
-
-// // Evict events are sent when a cache item was evicted from the cache.
-// Evict
-
-// // AllocFailed events are sent when allocation for a new item or when writing to an item couldn't complete.
-// AllocFailed
-
-// // Normal mask for receiving moderate level of notifications.
-// Normal = Evict | AllocFailed
-
-// // Verbose mask for receiving verbose level of notifications.
-// Verbose = Miss | Normal
-
-// // All mask for receiving all possible notifications.
-// All = Hit | Set | Delete | Expire | Verbose

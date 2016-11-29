@@ -191,8 +191,9 @@ func (w *writer) Write(p []byte) (int, error) {
 }
 
 func (w *writer) Close() error {
-	w.cache.mx.Lock()
 	defer w.entry.broadcastWrite()
+
+	w.cache.mx.Lock()
 	defer w.cache.mx.Unlock()
 
 	if w.entry.writeComplete {
@@ -201,5 +202,6 @@ func (w *writer) Close() error {
 
 	w.entry.writeComplete = true
 	w.cache.status.decWriters(w.entry.keyspace)
+	w.cache.status.writeComplete(w.entry.keyspace, w.entry.keySize, w.size)
 	return nil
 }

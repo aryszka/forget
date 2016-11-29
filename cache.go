@@ -32,7 +32,7 @@ var (
 	ErrCacheClosed = errors.New("cache closed")
 )
 
-func newCache(segmentCount, segmentSize int) *cache {
+func newCache(segmentCount, segmentSize int, notify *notify) *cache {
 	return &cache{
 		segmentCount: segmentCount,
 		segmentSize:  segmentSize,
@@ -42,7 +42,7 @@ func newCache(segmentCount, segmentSize int) *cache {
 		lru:          make(map[string]*list),
 		toDelete:     new(list),
 		hash:         make([][]*entry, segmentCount), // there cannot be more entries than segments
-		status:       newInstanceStatus(segmentSize, segmentCount*segmentSize),
+		status:       newInstanceStatus(segmentSize, segmentCount*segmentSize, notify),
 	}
 }
 
@@ -54,6 +54,7 @@ func (c *cache) evictFromFor(l *list, e *entry) bool {
 	current := l.first
 	for current != nil {
 		if current != e && c.deleteEntry(current.(*entry)) {
+			c.status.evict(e.keyspace, e.size)
 			return true
 		}
 
@@ -105,6 +106,7 @@ func (c *cache) allocateFor(e *entry) error {
 		}
 
 		if !c.evictFor(e) {
+			c.status.allocFailed(e.keyspace)
 			return errAllocationFailed
 		}
 	}
@@ -222,16 +224,19 @@ func (c *cache) get(id id) (*entry, bool) {
 
 	e, ok := c.lookup(id)
 	if !ok {
+		c.status.miss(id.keyspace, id.key)
 		return nil, false
 	}
 
 	if e.expired() {
 		c.deleteEntry(e)
+		c.status.expire(id.keyspace, id.key, e.size)
 		return nil, false
 	}
 
 	c.touchEntry(e)
 	e.reading++
+	c.status.hit(id.keyspace, id.key)
 	return e, ok
 }
 
@@ -251,6 +256,7 @@ func (c *cache) set(id id, ttl time.Duration) (*entry, error) {
 	lru.insert(e, nil)
 	c.addLookup(id, e)
 	c.status.itemAdded(e)
+	c.status.set(id.keyspace, id.key, e.keySize)
 
 	return e, nil
 }
@@ -262,6 +268,7 @@ func (c *cache) del(id id) {
 
 	if e, ok := c.lookup(id); ok {
 		c.deleteEntry(e)
+		c.status.del(id.keyspace, id.key, e.size)
 	}
 }
 

@@ -26,6 +26,10 @@ type Options struct {
 	// SegmentSize defines the segment size in the memory.
 	SegmentSize int
 
+	Notify chan<- *Event
+
+	NotifyMask EventType
+
 	hashing  func() hash.Hash64
 	maxProcs int
 }
@@ -64,17 +68,28 @@ func New(o Options) *Cache {
 		o.SegmentSize = DefaultSegmentSize
 	}
 
-	maxItemSize := o.MaxSize / o.maxProcs
-	maxItemSize -= maxItemSize % o.SegmentSize
+	if o.Notify == nil {
+		o.NotifyMask = 0
+	}
+
+	maxInstanceSize := o.MaxSize / o.maxProcs
+	maxInstanceSize -= maxInstanceSize % o.SegmentSize
+	segmentCount := maxInstanceSize / o.SegmentSize
+	if segmentCount == 0 {
+		o.maxProcs = 1
+		segmentCount = o.MaxSize / o.SegmentSize
+		maxInstanceSize = segmentCount * o.SegmentSize
+	}
 
 	c := make([]*cache, o.maxProcs)
+	n := newNotify(o.Notify, o.NotifyMask)
 	for i := range c {
-		c[i] = newCache(maxItemSize/o.SegmentSize, o.SegmentSize)
+		c[i] = newCache(segmentCount, o.SegmentSize, n)
 	}
 
 	return &Cache{
 		options:     o,
-		maxItemSize: maxItemSize,
+		maxItemSize: maxInstanceSize,
 		cache:       c,
 	}
 }
@@ -280,9 +295,14 @@ func (s *SingleSpace) Close() { s.cache.Close() }
 // - list for buckets
 // - list of lists for lru round robin
 // - what's the cost of having keyspaces in the notification statuses, what's the benefit?
+// - what's the cost of having the keyspace status at all?
+// - locking closer to where the section needs to protected
+// - what happens when the key doesn't fit but under the max cache size
+// - no blocking from notifications
 // hash collision stats
 // fuzzy testing
 // scenario testing
+// measure the right buffer size for the notify channel
 // why the drop at 100k items
 // expvar package
 
