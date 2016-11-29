@@ -8,7 +8,20 @@ type node interface {
 }
 
 type list struct {
-	first, last node
+	first, last        node
+	prevNode, nextNode node
+}
+
+func (l *list) prev() node     { return l.prevNode }
+func (l *list) next() node     { return l.nextNode }
+func (l *list) setPrev(p node) { l.prevNode = p }
+func (l *list) setNext(n node) { l.nextNode = n }
+
+func (l *list) firstLast() {
+	if l.first != nil {
+		l.first.setPrev(nil)
+		l.last.setNext(nil)
+	}
 }
 
 func (l *list) insertRange(first, last, before node) {
@@ -34,6 +47,8 @@ func (l *list) insertRange(first, last, before node) {
 	} else {
 		next.setPrev(last)
 	}
+
+	l.firstLast()
 }
 
 func (l *list) removeRange(first, last node) {
@@ -50,6 +65,8 @@ func (l *list) removeRange(first, last node) {
 	} else {
 		next.setPrev(prev)
 	}
+
+	l.firstLast()
 }
 
 func (l *list) insert(n, before node) { l.insertRange(n, n, before) }

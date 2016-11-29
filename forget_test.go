@@ -1419,3 +1419,59 @@ func TestEventTypeString(t *testing.T) {
 		t.Error("failed to stringify event type", all, allPlus)
 	}
 }
+
+func TestSetWhileAllBusy(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	c := New(Options{MaxSize: 6, SegmentSize: 3, maxProcs: 1})
+	defer c.Close()
+
+	if !c.SetKey("s1", "foo", time.Hour) {
+		t.Error("failed to set key")
+		return
+	}
+
+	if !c.SetKey("s1", "bar", time.Hour) {
+		t.Error("failed to set key")
+		return
+	}
+
+	r1, ok := c.Get("s1", "foo")
+	if !ok {
+		t.Error("failed to get key")
+		return
+	}
+
+	defer r1.Close()
+
+	r2, ok := c.Get("s1", "bar")
+	if !ok {
+		t.Error("failed to get key")
+		return
+	}
+
+	defer r2.Close()
+
+	setComplete := make(chan struct{})
+
+	go func() {
+		c.Set("s1", "baz", time.Hour)
+		close(setComplete)
+	}()
+
+	select {
+	case <-setComplete:
+		t.Error("set unexpectedly completed")
+	case <-time.After(12 * time.Millisecond):
+	}
+
+	r2.Close()
+
+	select {
+	case <-setComplete:
+	case <-time.After(12 * time.Millisecond):
+		t.Error("failed to complete set")
+	}
+}

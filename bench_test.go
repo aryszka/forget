@@ -132,10 +132,6 @@ func newForget(o Options) cacheIFace { return New(o) }
 
 func benchmarkRange(b *testing.B, parallel, concurrent int, create func(Options) cacheIFace, execute func(cacheIFace)) {
 	for _, itemCount := range []int{0, 10, 1000, 100000} {
-		if concurrent > parallel {
-			concurrent = parallel
-		}
-
 		b.Run(fmt.Sprintf("item count = %d", itemCount), func(b *testing.B) {
 			benchmark(b, parallel, itemCount, concurrent, create, execute)
 		})

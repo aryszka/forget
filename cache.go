@@ -18,8 +18,8 @@ type cache struct {
 	readCond                             *sync.Cond
 	memory                               *memory
 	toDelete                             *list
-	lru                                  map[string]*list
-	allLRU                               []*list
+	lruLookup                            map[string]*list
+	lruList                              *list
 	hash                                 [][]*entry
 	closed                               bool
 	status                               *InstanceStatus
@@ -39,7 +39,8 @@ func newCache(segmentCount, segmentSize int, notify *notify) *cache {
 		mx:           &sync.RWMutex{},
 		readCond:     sync.NewCond(&sync.Mutex{}),
 		memory:       newMemory(segmentCount, segmentSize),
-		lru:          make(map[string]*list),
+		lruLookup:    make(map[string]*list),
+		lruList:      new(list),
 		toDelete:     new(list),
 		hash:         make([][]*entry, segmentCount), // there cannot be more entries than segments
 		status:       newInstanceStatus(segmentSize, segmentCount*segmentSize, notify),
@@ -64,33 +65,43 @@ func (c *cache) evictFromFor(l *list, e *entry) bool {
 	return false
 }
 
+func (c *cache) rotateLRUs(at node) {
+	if at == nil || c.lruList.empty() {
+		return
+	}
+
+	from := c.lruList.first
+	c.lruList.removeRange(from, at)
+	c.lruList.insertRange(from, at, nil)
+}
+
 func (c *cache) evictFor(e *entry) bool {
 	if c.evictFromFor(c.toDelete, e) {
 		return true
 	}
 
-	lru, ok := c.lru[e.keyspace]
-	if ok && c.evictFromFor(lru, e) {
+	initial, ok := c.lruLookup[e.keyspace]
+	if ok && c.evictFromFor(initial, e) {
 		return true
 	}
 
-	// round robin the rest
-	var evicted bool
-	for i := 0; i < len(c.allLRU); i++ {
-		lruIndex := (i + c.lruOffset) % len(c.allLRU)
-		current := c.allLRU[lruIndex]
-		if current != lru && c.evictFromFor(current, e) {
-			evicted = true
-			break
+	// round robin the rest to evict one item
+	lru, _ := c.lruList.first.(*list)
+	for lru != nil {
+		if lru != initial && c.evictFromFor(lru, e) {
+			var rotateAt node = lru
+			if lru.empty() {
+				rotateAt = rotateAt.prev()
+			}
+
+			c.rotateLRUs(rotateAt)
+			return true
 		}
+
+		lru, _ = lru.next().(*list)
 	}
 
-	c.lruOffset++
-	if c.lruOffset >= len(c.allLRU) {
-		c.lruOffset = 0
-	}
-
-	return evicted
+	return false
 }
 
 func (c *cache) allocateFor(e *entry) error {
@@ -142,27 +153,21 @@ func (c *cache) addLookup(id id, e *entry) {
 }
 
 func (c *cache) touchEntry(e *entry) {
-	c.lru[e.keyspace].remove(e)
-	c.lru[e.keyspace].insert(e, nil)
+	c.lruLookup[e.keyspace].remove(e)
+	c.lruLookup[e.keyspace].insert(e, nil)
 }
 
 func (c *cache) removeKeyspaceLRU(lru *list, keyspace string) {
-	delete(c.lru, keyspace)
-	for i, current := range c.allLRU {
-		if current == lru {
-			last := len(c.allLRU) - 1
-			c.allLRU[last], c.allLRU[i], c.allLRU = nil, c.allLRU[last], c.allLRU[:last]
-			break
-		}
-	}
+	delete(c.lruLookup, keyspace)
+	c.lruList.remove(lru)
 }
 
 func (c *cache) keyspaceLRU(keyspace string) *list {
-	lru := c.lru[keyspace]
+	lru := c.lruLookup[keyspace]
 	if lru == nil {
 		lru = new(list)
-		c.lru[keyspace] = lru
-		c.allLRU = append(c.allLRU, lru)
+		c.lruLookup[keyspace] = lru
+		c.lruList.insert(lru, nil)
 	}
 
 	return lru
@@ -187,7 +192,7 @@ func (c *cache) deleteLookup(e *entry) bool {
 
 func (c *cache) deleteEntry(e *entry) bool {
 	if c.deleteLookup(e) {
-		lru := c.lru[e.keyspace]
+		lru := c.lruLookup[e.keyspace]
 		lru.remove(e)
 		if lru.empty() {
 			c.removeKeyspaceLRU(lru, e.keyspace)
@@ -296,14 +301,16 @@ func (c *cache) close() {
 	}
 
 	c.closeAll(c.toDelete)
-	for _, lru := range c.lru {
-		c.closeAll(lru)
+	lru := c.lruList.first
+	for lru != nil {
+		c.closeAll(lru.(*list))
+		lru = lru.next()
 	}
 
 	c.memory = nil
 	c.memory = nil
 	c.toDelete = nil
-	c.lru = nil
+	c.lruLookup = nil
 	c.hash = nil
 	c.closed = true
 }

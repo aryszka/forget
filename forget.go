@@ -290,20 +290,19 @@ func (s *SingleSpace) Del(key string) {
 // Close shuts down the cache and releases resource.
 func (s *SingleSpace) Close() { s.cache.Close() }
 
-// status, notifications
-// refactor tests with documentation, examples, more stochastic io tests (buffer sizes, segment borders)
+// eviction from a single lru fails
+// refactor, documentation, examples
+// - naming
 // - list for buckets
 // - list of lists for lru round robin
-// - what's the cost of having keyspaces in the notification statuses, what's the benefit?
-// - what's the cost of having the keyspace status at all?
 // - locking closer to where the section needs to protected
-// - what happens when the key doesn't fit but under the max cache size
-// - no blocking from notifications
-// hash collision stats
-// fuzzy testing
-// scenario testing
-// measure the right buffer size for the notify channel
-// why the drop at 100k items
+// - no blocking from notifications -> enforce min channel buffer
+// tests:
+// - tests based on the documentation
+// - tests based on the code
+// - more combined io tests (buffer sizes, segment borders, event orders)
+// - fuzzy testing
+// - scenario testing
+// - why the drop at 100k items
 // expvar package
-
-// once possible, make an http comparison
+// http package
