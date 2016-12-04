@@ -1478,12 +1478,55 @@ func TestSetWhileAllBusy(t *testing.T) {
 
 func TestNotifyMaskDefaultsToNormal(t *testing.T) {
 	n := make(chan *Event, 1)
-	c := New(Options{CacheSize: 6, SegmentSize: 3, Notify: n})
+	c := New(Options{CacheSize: 6, SegmentSize: 3, Notify: n, maxInstanceCount: 1})
 	defer c.Close()
 	c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 	c.SetBytes("s1", "bar", []byte{1, 2, 3}, time.Hour)
 	e := <-n
 	if !e.Type.Is(Evict) {
 		t.Error("failed to set mask")
+	}
+}
+
+func TestReleaseMemoryOnFailedKeyWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	c := New(Options{CacheSize: 6, SegmentSize: 3, maxInstanceCount: 1})
+	defer c.Close()
+
+	if !c.SetKey("s1", "foo", time.Hour) {
+		t.Error("failed to set inital item")
+		return
+	}
+
+	r, ok := c.Get("s1", "foo")
+	if !ok {
+		t.Error("failed to get initial item")
+		return
+	}
+
+	done := make(chan struct{})
+	go func() {
+		if !c.SetKey("s1", "123456", time.Hour) {
+			t.Error("failed to set item")
+		}
+
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Error("too large key write succeeded")
+	case <-time.After(12 * time.Millisecond):
+	}
+
+	r.Close()
+
+	select {
+	case <-done:
+	case <-time.After(12 * time.Millisecond):
+		t.Error("timeout")
 	}
 }

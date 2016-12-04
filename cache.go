@@ -39,10 +39,11 @@ func newCache(segmentCount, segmentSize int, notify *notify) *cache {
 	}
 }
 
+// tries to evict one item from an lru list, other than the one in the args and with a size greater than 0
 func (c *cache) evictForFrom(i *item, lru *list) bool {
 	current := lru.first
 	for current != nil {
-		if currentItem := current.(*item); currentItem != i && c.deleteItem(currentItem) {
+		if currentItem := current.(*item); currentItem != i && currentItem.size > 0 && c.deleteItem(currentItem) {
 			c.stats.notifyEvict(currentItem.keyspace, currentItem.size)
 			return true
 		}
@@ -53,6 +54,9 @@ func (c *cache) evictForFrom(i *item, lru *list) bool {
 	return false
 }
 
+// tries to evict one item, other than the one in the args. First tries from the temporary deleted items,
+// checking if no reader is blocking them anymore. Next tries in the item's own keyspace. Last tries all other
+// namespaces in a round-robin fashion.
 func (c *cache) evictFor(i *item) bool {
 	if c.evictForFrom(i, c.deleteQueue) {
 		return true
@@ -63,7 +67,7 @@ func (c *cache) evictFor(i *item) bool {
 		return true
 	}
 
-	// round-robin the rest to evict one item
+	// round-robin over the rest to evict one item
 	lru, _ := c.lruRotate.first.(*list)
 	for lru != nil {
 		if lru != keyspaceLRU && c.evictForFrom(i, lru) {
@@ -83,10 +87,17 @@ func (c *cache) evictFor(i *item) bool {
 	return false
 }
 
-func (c *cache) allocateOnce(i *item) bool {
+// tries to allocate a single segment in the free memory space. If it fails, tries to evict an item. When
+// allocated, aligns the segment with the item's existing segments.
+func (c *cache) allocateFor(i *item) error {
 	s, ok := c.memory.allocate()
 	if !ok {
-		return false
+		if c.evictFor(i) {
+			s, _ = c.memory.allocate()
+		} else {
+			c.stats.notifyAllocFailed(i.keyspace)
+			return errAllocationFailed
+		}
 	}
 
 	_, last := i.data()
@@ -95,23 +106,10 @@ func (c *cache) allocateOnce(i *item) bool {
 	}
 
 	i.appendSegment(s)
-	return true
+	return nil
 }
 
-func (c *cache) allocateFor(i *item) error {
-	if c.allocateOnce(i) {
-		return nil
-	}
-
-	if c.evictFor(i) {
-		c.allocateOnce(i)
-		return nil
-	}
-
-	c.stats.notifyAllocFailed(i.keyspace)
-	return errAllocationFailed
-}
-
+// allocates 0 or more segments to fit the key with the item and saves the key bytes in memory
 func (c *cache) writeKey(i *item, key string) error {
 	p := []byte(key)
 	for len(p) > 0 {
@@ -126,10 +124,12 @@ func (c *cache) writeKey(i *item, key string) error {
 	return nil
 }
 
+// returns the index of the lookup bucket based on an item's hash
 func (c *cache) bucketIndex(hash uint64) int {
 	return int(hash % uint64(len(c.itemLookup)))
 }
 
+// finds an item based on the hash, keyspace and key
 func (c *cache) lookup(hash uint64, keyspace, key string) (*item, bool) {
 	for _, i := range c.itemLookup[c.bucketIndex(hash)] {
 		if i.keyspace == keyspace && i.keyEquals(key) {
@@ -140,21 +140,26 @@ func (c *cache) lookup(hash uint64, keyspace, key string) (*item, bool) {
 	return nil, false
 }
 
+// stores an item in the right lookup bucket
 func (c *cache) addLookup(hash uint64, i *item) {
 	index := c.bucketIndex(hash)
 	c.itemLookup[index] = append(c.itemLookup[index], i)
 }
 
+// moves an item in its keyspace's LRU list to the end, meaning that it was the most recently used item in the
+// keyspace
 func (c *cache) touchItem(i *item) {
 	c.lruLookup[i.keyspace].remove(i)
 	c.lruLookup[i.keyspace].insert(i, nil)
 }
 
+// removes an LRU list
 func (c *cache) removeKeyspaceLRU(lru *list, keyspace string) {
 	delete(c.lruLookup, keyspace)
 	c.lruRotate.remove(lru)
 }
 
+// returns the LRU list for a keyspace. If it doesn't exist, creates it and stores it
 func (c *cache) keyspaceLRU(keyspace string) *list {
 	lru := c.lruLookup[keyspace]
 	if lru == nil {
@@ -166,6 +171,7 @@ func (c *cache) keyspaceLRU(keyspace string) *list {
 	return lru
 }
 
+// deletes an item's lookup entry
 func (c *cache) deleteLookup(i *item) bool {
 	bi := c.bucketIndex(i.hash)
 	bucket := c.itemLookup[bi]
@@ -184,6 +190,8 @@ func (c *cache) deleteLookup(i *item) bool {
 	return false
 }
 
+// deletes an item. If it has active readers, it preserves it in the queue of deleted items. If it can be
+// completely deleted, releases the allocated memory for the item
 func (c *cache) deleteItem(i *item) bool {
 	if c.deleteLookup(i) {
 		lru := c.lruLookup[i.keyspace]
@@ -216,6 +224,8 @@ func (c *cache) deleteItem(i *item) bool {
 	return true
 }
 
+// tries to find an item based on its hash, key and keyspace. If found but expired, deletes it. When finds a
+// valid item, it sets the item as the most recently used one in the LRU list of the keyspace
 func (c *cache) get(hash uint64, keyspace, key string) (io.ReadCloser, bool) {
 	c.mx.Lock()
 	defer c.mx.Unlock()
@@ -243,7 +253,10 @@ func (c *cache) get(hash uint64, keyspace, key string) (io.ReadCloser, bool) {
 	return newReader(c, i), true
 }
 
-func (c *cache) createItem(hash uint64, keyspace, key string, ttl time.Duration) (*item, error) {
+// tries to create a new item. If one exists with the same keyspace and key, it deletes it. Stores the item in
+// the lookup table and the LRU list of the keyspace. If memory cannot be allocated for the item key due to
+// active readers holding too many existing items, it fails
+func (c *cache) trySet(hash uint64, keyspace, key string, ttl time.Duration) (io.WriteCloser, error) {
 	c.mx.Lock()
 	defer c.mx.Unlock()
 
@@ -252,26 +265,34 @@ func (c *cache) createItem(hash uint64, keyspace, key string, ttl time.Duration)
 	}
 
 	c.deleteIfExists(hash, keyspace, key)
-	i := newItem(hash, keyspace, len(key), ttl)
 
+	i := newItem(hash, keyspace, len(key), ttl)
 	if err := c.writeKey(i, key); err != nil {
+		first, last := i.data()
+		if first != nil {
+			c.memory.free(first, last)
+		}
+
 		return nil, err
 	}
 
+	c.addLookup(hash, i)
+
 	lru := c.keyspaceLRU(i.keyspace)
 	lru.insert(i, nil)
-	c.addLookup(hash, i)
 
 	c.stats.addItem(i)
 	c.stats.notifySet(keyspace, key, i.keySize)
 	c.stats.incWriters(keyspace)
 
-	return i, nil
+	return newWriter(c, i), nil
 }
 
+// creates a new item. If the item key cannot be stored due to active readers holding too many existing items,
+// it blocks, and waits for the next reader to signal that it's done
 func (c *cache) set(hash uint64, keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
 	for {
-		if i, err := c.createItem(hash, keyspace, key, ttl); err == errAllocationFailed {
+		if w, err := c.trySet(hash, keyspace, key, ttl); err == errAllocationFailed {
 			// waiting to be able to store the key
 			// condition checking happens during writing they key
 			c.readDoneCond.L.Lock()
@@ -280,11 +301,12 @@ func (c *cache) set(hash uint64, keyspace, key string, ttl time.Duration) (io.Wr
 		} else if err != nil {
 			return nil, false
 		} else {
-			return newWriter(c, i), true
+			return w, true
 		}
 	}
 }
 
+// deletes an item if it can be found in the lookup table
 func (c *cache) deleteIfExists(hash uint64, keyspace, key string) {
 	if i, ok := c.lookup(hash, keyspace, key); ok {
 		c.deleteItem(i)
@@ -292,6 +314,7 @@ func (c *cache) deleteIfExists(hash uint64, keyspace, key string) {
 	}
 }
 
+// deletes an item if it can be found in the cache
 func (c *cache) del(hash uint64, keyspace, key string) {
 	c.mx.Lock()
 	defer c.mx.Unlock()
@@ -309,7 +332,8 @@ func (c *cache) getStats() *InstanceStats {
 	return c.stats.clone()
 }
 
-func (c *cache) closeAll(l *list) {
+// closes all items in a list
+func closeAll(l *list) {
 	i := l.first
 	for i != nil {
 		i.(*item).close()
@@ -317,6 +341,7 @@ func (c *cache) closeAll(l *list) {
 	}
 }
 
+// closes the cache. It releases the allocated memory
 func (c *cache) close() {
 	c.mx.Lock()
 	defer c.mx.Unlock()
@@ -325,10 +350,10 @@ func (c *cache) close() {
 		return
 	}
 
-	c.closeAll(c.deleteQueue)
+	closeAll(c.deleteQueue)
 	lru := c.lruRotate.first
 	for lru != nil {
-		c.closeAll(lru.(*list))
+		closeAll(lru.(*list))
 		lru = lru.next()
 	}
 

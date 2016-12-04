@@ -22,8 +22,8 @@ type writer struct {
 }
 
 var (
-	// ErrItemDiscarded is returned by IO operations when an item has been discarded, e.g. evicted, deleted or the discarded
-	// due to the cache was closed.
+	// ErrItemDiscarded is returned by IO operations when an item has been discarded, e.g. evicted, deleted or
+	// the discarded due to the cache was closed.
 	ErrItemDiscarded = errors.New("item discarded")
 
 	// ErrWriteLimit is returned when writing to an item fills the available size.
@@ -44,6 +44,10 @@ func newReader(c *cache, i *item) *reader {
 	}
 }
 
+// reads from the item's current underlying segment once at the current segment position. If reached the end of
+// the segment, it steps first to the next segment and resets the segment position. If reached end of the item
+// and the write to the item is complete, returns EOF, if reached the end but the item is still being written,
+// returns nil
 func (r *reader) readOne(p []byte) (int, error) {
 	r.cache.mx.RLock()
 	defer r.cache.mx.RUnlock()
@@ -81,6 +85,8 @@ func (r *reader) readOne(p []byte) (int, error) {
 	return n, nil
 }
 
+// reads from an item at the current position. If 0 bytes were read and the item is still being written, it
+// blocks.
 func (r *reader) Read(p []byte) (int, error) {
 	var count int
 	for len(p) > 0 {
@@ -92,8 +98,8 @@ func (r *reader) Read(p []byte) (int, error) {
 			return count, err
 		}
 
-		// only block if there was nothing to read and no error
 		if n == 0 {
+			// only block if there was nothing to read and no error.
 			// here waiting only for a change, condition checking happens during the actual read
 			r.item.writeCond.L.Lock()
 			r.item.writeCond.Wait()
@@ -104,6 +110,7 @@ func (r *reader) Read(p []byte) (int, error) {
 	return count, nil
 }
 
+// closes the reader and signals read done.
 func (r *reader) Close() error {
 	defer r.cache.readDoneCond.Broadcast()
 
@@ -130,35 +137,9 @@ func newWriter(c *cache, i *item) *writer {
 	}
 }
 
-func (w *writer) writeOne(p []byte, unblock bool) (int, error) {
-	defer w.item.writeCond.Broadcast()
-
-	w.cache.mx.Lock()
-	defer w.cache.mx.Unlock()
-
-	// only for statistics
-	if unblock {
-		w.cache.stats.decWritersBlocked(w.item.keyspace)
-	}
-
-	if w.item.writeComplete {
-		return 0, ErrWriterClosed
-	}
-
-	n, err := w.item.write(p)
-	if n == len(p) || err != nil {
-		return n, err
-	}
-
-	// this assumes that Write continues until p is fully drained.
-	err = w.cache.allocateFor(w.item)
-	if err != nil {
-		w.cache.stats.incWritersBlocked(w.item.keyspace)
-	}
-
-	return n, err
-}
-
+// writes to an item. If the writer was closed or the max item size was reached, returns an error. If the last
+// segment of the item is full, tries to allocate a new segment. If allocation fails due to too many active
+// readers, the write blocks until allocation becomes possible.
 func (w *writer) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -170,18 +151,41 @@ func (w *writer) Write(p []byte) (int, error) {
 	)
 
 	for len(p) > 0 {
-		n, err := w.writeOne(p, blocked)
-		p = p[n:]
-		count += n
-		w.size += n
+		err := func() error {
+			defer w.item.writeCond.Broadcast()
 
-		if err != nil && err != errAllocationFailed {
-			return count, err
-		}
+			w.cache.mx.Lock()
+			defer w.cache.mx.Unlock()
 
-		if len(p) > 0 && w.size == w.max {
-			return count, ErrWriteLimit
-		}
+			// only for statistics
+			if blocked {
+				w.cache.stats.decWritersBlocked(w.item.keyspace)
+			}
+
+			if w.item.writeComplete {
+				return ErrWriterClosed
+			}
+
+			n, err := w.item.write(p)
+			p = p[n:]
+			count += n
+			w.size += n
+
+			if len(p) == 0 || err != nil {
+				return err
+			}
+
+			if len(p) > 0 && w.size == w.max {
+				return ErrWriteLimit
+			}
+
+			err = w.cache.allocateFor(w.item)
+			if err == errAllocationFailed {
+				w.cache.stats.incWritersBlocked(w.item.keyspace)
+			}
+
+			return err
+		}()
 
 		if err == errAllocationFailed {
 			blocked = true
@@ -190,12 +194,15 @@ func (w *writer) Write(p []byte) (int, error) {
 			w.cache.readDoneCond.L.Lock()
 			w.cache.readDoneCond.Wait()
 			w.cache.readDoneCond.L.Unlock()
+		} else if err != nil {
+			return count, err
 		}
 	}
 
 	return count, nil
 }
 
+// closes the writer and signals write complete
 func (w *writer) Close() error {
 	defer w.item.writeCond.Broadcast()
 

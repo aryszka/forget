@@ -38,8 +38,8 @@ type Options struct {
 	maxInstanceCount int
 }
 
-// Cache provides an in-memory cache for arbitrary binary data identified by keyspace and key. All methods of a
-// Cache object are thread safe.
+// Cache provides an in-memory cache for arbitrary binary data identified by keyspaces and keys. All methods of
+// a Cache object are thread safe.
 type Cache struct {
 	options     Options
 	maxItemSize int
@@ -52,11 +52,11 @@ type SingleSpace struct {
 }
 
 // New initializes a cache.
+//
+// Forget creates internally multiple independent cache instances, as many as the maximum of the reported CPU
+// cores or the GOMAXPROCS value. These instances can be accessed in parallel without synchronization. This
+// internal split of the cache affects the maximum size of a single item: ~ CacheSize / NumCPU.
 func New(o Options) *Cache {
-	if o.hashing == nil {
-		o.hashing = fnv.New64a
-	}
-
 	if o.CacheSize <= 0 {
 		o.CacheSize = DefaultCacheSize
 	}
@@ -69,6 +69,10 @@ func New(o Options) *Cache {
 		o.NotifyMask = 0
 	} else if o.NotifyMask == 0 {
 		o.NotifyMask = Normal
+	}
+
+	if o.hashing == nil {
+		o.hashing = fnv.New64a
 	}
 
 	instanceCount := o.maxInstanceCount
@@ -88,8 +92,8 @@ func New(o Options) *Cache {
 		instanceSize = segmentCount * o.SegmentSize
 	}
 
-	c := make([]*cache, instanceCount)
 	n := newNotify(o.Notify, o.NotifyMask)
+	c := make([]*cache, instanceCount)
 	for i := range c {
 		c[i] = newCache(segmentCount, o.SegmentSize, n)
 	}
@@ -108,19 +112,21 @@ func (c *Cache) hash(key string) uint64 {
 }
 
 func (c *Cache) getCache(hash uint64) *cache {
-	// TODO: >> 32 is here for the fnv last byte thing, but not sure about it, needs testing of distribution
+	// take the cache instance based on the middle of the key hash
 	return c.cache[int(hash>>32)%len(c.cache)]
 }
 
+// copies from a reader to a writer with a buffer of the same size as the used segments
 func (c *Cache) copy(to io.Writer, from io.Reader) (int64, error) {
 	return io.CopyBuffer(to, from, make([]byte, c.options.SegmentSize))
 }
 
-// Get retrieves a reader to an item in the cache. The second return argument indicates if the item was
-// found. Reading can start before writing to the item was finished. The reader blocks if the read reaches the point that
-// the writer didn't pass yet. If the write finished, and the reader reaches the end of the item, EOF is
-// returned. The reader returns ErrCacheClosed if the cache was closed and ErrItemDiscarded if
-// the original item with the given keyspace and key is not available anymore. The reader must be closed.
+// Get retrieves a reader to an item in the cache. The second return argument indicates if the item was found.
+// Reading can start before writing to the item was finished. The reader blocks if the read reaches the point
+// that the writer didn't pass yet. If the write finished, and the reader reaches the end of the item, EOF is
+// returned. The reader returns ErrCacheClosed if the cache was closed and ErrItemDiscarded if the original item
+// with the given keyspace and key is not available anymore. The reader must be closed after the read was
+// finished.
 func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 	h := c.hash(key)
 	ci := c.getCache(h)
@@ -128,6 +134,8 @@ func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 }
 
 // GetKey checks if a key is in the cache.
+//
+// It is equivalent to calling Get, and closing the reader without reading from it.
 func (c *Cache) GetKey(keyspace, key string) bool {
 	if r, exists := c.Get(keyspace, key); exists {
 		r.Close()
@@ -137,10 +145,10 @@ func (c *Cache) GetKey(keyspace, key string) bool {
 	return false
 }
 
-// GetBytes retrieves an item from the cache with a key. If found, the second
+// GetBytes retrieves an item from the cache with a keyspace and key. If found, the second
 // return argument will be true, otherwise false.
 //
-// Equivalent to get and copy to end, so it blocks until write finished.
+// It is equivalent to calling Get, copying the reader to the end and closing the reader.
 func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 	r, ok := c.Get(keyspace, key)
 	if !ok {
@@ -154,9 +162,10 @@ func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 	return b.Bytes(), err == nil
 }
 
-// Set creates a cache item and returns a writer that can be used to store the assocated data.
-// The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
-// reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
+// Set creates a cache item and returns a writer that can be used to store the associated data. The writer
+// returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item reaches the
+// maximum item size of the cache. The writer must be closed to indicate that no more data will be written to
+// the item.
 func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
 	if len(key) > c.maxItemSize {
 		return nil, false
@@ -168,6 +177,8 @@ func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bo
 }
 
 // SetKey sets only a key without data.
+//
+// It is equivalent to calling Set, and closing the writer without writing any data.
 func (c *Cache) SetKey(keyspace, key string, ttl time.Duration) bool {
 	if w, ok := c.Set(keyspace, key, ttl); ok {
 		err := w.Close()
@@ -177,7 +188,9 @@ func (c *Cache) SetKey(keyspace, key string, ttl time.Duration) bool {
 	return false
 }
 
-// SetBytes sets an item in the cache with a key.
+// SetBytes sets an item in the cache with a keyspace and key.
+//
+// It is equivalent to calling Set, writing the complete data to the item and closing the writer.
 func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) bool {
 	w, ok := c.Set(keyspace, key, ttl)
 	if !ok {
@@ -191,7 +204,7 @@ func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) b
 	return err == nil
 }
 
-// Del deletes an item from the cache with a key.
+// Del deletes an item from the cache with a keyspace and key.
 func (c *Cache) Del(keyspace, key string) {
 	h := c.hash(key)
 	ci := c.getCache(h)
@@ -259,12 +272,7 @@ func (s *SingleSpace) Del(key string) {
 // Close shuts down the cache and releases resource.
 func (s *SingleSpace) Close() { s.cache.Close() }
 
-// refactor, documentation, examples
-// - naming
-// - list for buckets
-// - list of lists for lru round-robin
-// - locking closer to where the section needs to protected
-// - no blocking from notifications -> enforce min channel buffer
+// docs
 // tests:
 // - tests based on the documentation
 // - tests based on the code
@@ -272,5 +280,7 @@ func (s *SingleSpace) Close() { s.cache.Close() }
 // - fuzzy testing
 // - scenario testing
 // - why the drop at 100k items
+// - check stats, utilization
+// refactor cond mutexes
 // expvar package
 // http package

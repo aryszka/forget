@@ -54,6 +54,8 @@ func (i *item) appendSegment(s *segment) {
 	i.segmentPosition = 0
 }
 
+// checks if a key equals with the item's key. Keys are stored in the underlying segments, if a key spans
+// multiple segments, keyEquals proceeds through the required number of segments.
 func (i *item) keyEquals(key string) bool {
 	if len(key) != i.keySize {
 		return false
@@ -72,6 +74,7 @@ func (i *item) keyEquals(key string) bool {
 	return len(p) == 0
 }
 
+// writes from the last used segment position of the last segment, maximum to the end of the segment.
 func (i *item) write(p []byte) (int, error) {
 	if i.discarded {
 		return 0, ErrItemDiscarded
@@ -88,6 +91,7 @@ func (i *item) write(p []byte) (int, error) {
 	return n, nil
 }
 
+// closes the item and releases the underlying segments
 func (i *item) close() {
 	i.discarded = true
 	i.firstSegment = nil

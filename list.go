@@ -9,15 +9,17 @@ type node interface {
 
 type list struct {
 	first, last        node
-	prevNode, nextNode node
+	prevList, nextList node
 }
 
 // implements list of lists:
-func (l *list) prev() node     { return l.prevNode }
-func (l *list) next() node     { return l.nextNode }
-func (l *list) setPrev(p node) { l.prevNode = p }
-func (l *list) setNext(n node) { l.nextNode = n }
+func (l *list) prev() node     { return l.prevList }
+func (l *list) next() node     { return l.nextList }
+func (l *list) setPrev(p node) { l.prevList = p }
+func (l *list) setNext(n node) { l.nextList = n }
 
+// inserts a range before a node in the list. If the before argument is nil, it inserts the range at the end of
+// the list
 func (l *list) insertRange(first, last, before node) {
 	var prev node
 	if before == nil {
@@ -49,6 +51,7 @@ func (l *list) insertRange(first, last, before node) {
 	}
 }
 
+// removes a range from the list
 func (l *list) removeRange(first, last node) {
 	prev, next := first.prev(), last.next()
 
@@ -71,6 +74,8 @@ func (l *list) removeRange(first, last node) {
 	}
 }
 
+// removes the range from the list that is before the argument node, and inserts it at the end of the remaining
+// list
 func (l *list) rotate(at node) {
 	if at == nil || l.empty() {
 		return

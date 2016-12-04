@@ -2,8 +2,8 @@ package forget
 
 import "strings"
 
-// EventType indicates the nature of a notification event. It also can be used to masked which events should
-// cause a notification.
+// EventType indicates the nature of a notification event. It is also used to maske which events should trigger
+// a notification.
 type EventType int
 
 const (
@@ -17,16 +17,16 @@ const (
 	// Set events are sent when a cache item was stored.
 	Set
 
-	// Delete events are sent when a cache item was deleted (explicitly calling Del()).
+	// Delete events are sent when a cache item was deleted (explicitly calling Del() or overwritten by Set()).
 	Delete
 
 	// WriteComplete events are sent when a cache item's write is finished.
 	WriteComplete
 
-	// Expire events are sent when a cache item was detected to be expired. Always together with Miss.
+	// Expire events are sent when a cache item was detected to be expired. Always together with Delete and Miss.
 	Expire
 
-	// Evict events are sent when a cache item was evicted from the cache.
+	// Evict events are sent when a cache item was evicted from the cache. Always together with Delete.
 	Evict
 
 	// AllocFailed events are sent when allocation for a new item or when writing to an item couldn't complete.
@@ -42,11 +42,23 @@ const (
 	All = Hit | Set | Delete | WriteComplete | Expire | Verbose
 )
 
-// Event objects describe the cause of a notification.
+// Event objects describe an internal change or other event in the cache.
 type Event struct {
-	Type                                EventType
-	Keyspace, Key                       string
-	EffectiveSizeChange, UsedSizeChange int
+
+	// Type indicates the reason of the event.
+	Type EventType
+
+	// Keyspace contains the keyspace of the item if an event is related to a single item.
+	Keyspace string
+
+	// Key contains the key of the item if an event is related to a single item.
+	Key string
+
+	// EffectiveSizeChange contains the net size change caused by the event.
+	EffectiveSizeChange int
+
+	// UsedSizeChange contains the size change caused by the event, calculated based on the freed or allocated segments.
+	UsedSizeChange int
 }
 
 type notify struct {
@@ -56,32 +68,64 @@ type notify struct {
 
 // Stats objects contain cache statistics about keyspaces, internal cache instances or the complete cache.
 type Stats struct {
-	ItemCount        int
-	EffectiveSize    int
-	UsedSize         int
-	Readers          int
+
+	// ItemCount indicates the number of stored items.
+	ItemCount int
+
+	// EffectiveSize indicates the net size of the stored items.
+	EffectiveSize int
+
+	// UsedSize indicates the total size of the used segments.
+	UsedSize int
+
+	// Readers indicates how many readers were creaetd and not yet finished (closed).
+	Readers int
+
+	// ReadersOnDeleted indicates how many readers were created whose items were deleted since then but the
+	// readers are still not done.
 	ReadersOnDeleted int
-	Writers          int
-	WritersBlocked   int
+
+	// Writers indicates how many writers were created and not yet completed (closed).
+	Writers int
+
+	// WritersBlocked indicates how many writers were created whose write is blocked due to active readers
+	// preventing eviction.
+	WritersBlocked int
 }
 
 // InstanceStats objects contain statistics about an internal cache instance.
 type InstanceStats struct {
-	Total           *Stats
+
+	// Total contains the statistics about a cache instance.
+	Total *Stats
+
+	// AvailableMemory tells how many memory is avalable in a cache instance for new items or further writing.
 	AvailableMemory int
-	Keyspaces       map[string]*Stats
-	segmentSize     int
-	notify          *notify
+
+	// Keyspaces contain statistics split by keyspaces in a cache instance.
+	Keyspaces map[string]*Stats
+
+	segmentSize int
+	notify      *notify
 }
 
 // CacheStats objects contain statistics about the cache, including the internal cache instnaces and keyspaces.
 type CacheStats struct {
-	Total           *Stats
+
+	// Total contains statistics the cache.
+	Total *Stats
+
+	// AvailableMemory tells how many memory is avalable in the cache for new items or further writing.
 	AvailableMemory int
-	Keyspaces       map[string]*Stats
-	Instances       []*InstanceStats
+
+	// Keyspaces contain statistics split by keyspaces in the cache.
+	Keyspaces map[string]*Stats
+
+	// Instances contains statistics split by the internal cache instances.
+	Instances []*InstanceStats
 }
 
+// String returns the string representation of an EventType value, listing all the set flags.
 func (et EventType) String() string {
 	switch et {
 	case Hit:
@@ -120,7 +164,7 @@ func (et EventType) String() string {
 	}
 }
 
-// Is checks if an EventType flag is set.
+// Is checks if one or more EventType flags are set.
 func (et EventType) Is(test EventType) bool {
 	return et&test != 0
 }
@@ -132,14 +176,14 @@ func newNotify(listener chan<- *Event, mask EventType) *notify {
 	}
 }
 
+// forwards an event if it matches the mask
 func (n *notify) send(i *Event) {
-	if n.mask&i.Type == 0 {
-		return
+	if i.Type.Is(n.mask) {
+		n.listener <- i
 	}
-
-	n.listener <- i
 }
 
+// adds every field of the argument stat to the according field in the current stat
 func (s *Stats) add(d *Stats) {
 	s.ItemCount += d.ItemCount
 	s.EffectiveSize += d.EffectiveSize
@@ -160,6 +204,8 @@ func newInstanceStats(segmentSize, availableMemory int, n *notify) *InstanceStat
 	}
 }
 
+// calculates how much size a net size value takes in an item based on the segment size and the current segment
+// offset
 func usedSize(size, offset, segmentSize int) int {
 	size += offset % segmentSize
 	usedSize := (size / segmentSize) * segmentSize
@@ -170,12 +216,8 @@ func usedSize(size, offset, segmentSize int) int {
 	return usedSize
 }
 
-func (s *InstanceStats) sendEvent(i *Event) {
-	s.notify.send(i)
-}
-
 func (s *InstanceStats) notifyHit(keyspace, key string) {
-	s.sendEvent(&Event{
+	s.notify.send(&Event{
 		Type:     Hit,
 		Keyspace: keyspace,
 		Key:      key,
@@ -183,7 +225,7 @@ func (s *InstanceStats) notifyHit(keyspace, key string) {
 }
 
 func (s *InstanceStats) notifyMiss(keyspace, key string) {
-	s.sendEvent(&Event{
+	s.notify.send(&Event{
 		Type:     Miss,
 		Keyspace: keyspace,
 		Key:      key,
@@ -191,7 +233,7 @@ func (s *InstanceStats) notifyMiss(keyspace, key string) {
 }
 
 func (s *InstanceStats) notifySet(keyspace, key string, keySize int) {
-	s.sendEvent(&Event{
+	s.notify.send(&Event{
 		Type:                Set,
 		Keyspace:            keyspace,
 		Key:                 key,
@@ -201,7 +243,7 @@ func (s *InstanceStats) notifySet(keyspace, key string, keySize int) {
 }
 
 func (s *InstanceStats) notifyWriteComplete(keyspace string, keySize, contentSize int) {
-	s.sendEvent(&Event{
+	s.notify.send(&Event{
 		Type:                WriteComplete,
 		Keyspace:            keyspace,
 		EffectiveSizeChange: contentSize,
@@ -210,7 +252,7 @@ func (s *InstanceStats) notifyWriteComplete(keyspace string, keySize, contentSiz
 }
 
 func (s *InstanceStats) notifyRemove(typ EventType, keyspace, key string, size int) {
-	s.sendEvent(&Event{
+	s.notify.send(&Event{
 		Type:                typ,
 		Keyspace:            keyspace,
 		Key:                 key,
@@ -232,12 +274,13 @@ func (s *InstanceStats) notifyEvict(keyspace string, size int) {
 }
 
 func (s *InstanceStats) notifyAllocFailed(keyspace string) {
-	s.sendEvent(&Event{
+	s.notify.send(&Event{
 		Type:     AllocFailed,
 		Keyspace: keyspace,
 	})
 }
 
+// tracks the changes of all the indicators caused by an added or removed item
 func (s *InstanceStats) itemChange(i *item, mod int) {
 	size := i.size * mod
 	usedSize := usedSize(i.size, 0, s.segmentSize) * mod
