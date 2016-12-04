@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	// DefaultMaxSize is used when MaxSize is not specified in the initial Options.
-	DefaultMaxSize = 1 << 30
+	// DefaultCacheSize is used when CacheSize is not specified in the initial Options.
+	DefaultCacheSize = 1 << 30
 
 	// DefaultSegmentSize is used when SegmentSize is not specified in the initial Options.
 	DefaultSegmentSize = 1 << 15
@@ -20,22 +20,26 @@ const (
 // Options objects are used to pass in parameters to new Cache instances.
 type Options struct {
 
-	// MaxSize defines the maximum size of the memory.
-	MaxSize int
+	// CacheSize defines the size of the cache.
+	CacheSize int
 
 	// SegmentSize defines the segment size in the memory.
 	SegmentSize int
 
+	// Notify is used by the cache to send notifications about internal events. When nil, no notifications are
+	// sent. It is recommended to use a channel with a small buffer, e.g. 2.
 	Notify chan<- *Event
 
+	// NotifyMask can be used to select which event types should trigger a notification. The default is Normal,
+	// meaning that evictions and allocation failures will trigger a notification.
 	NotifyMask EventType
 
-	hashing  func() hash.Hash64
-	maxProcs int
+	hashing          func() hash.Hash64
+	maxInstanceCount int
 }
 
-// Cache provides an in-memory cache for arbitrary binary data
-// identified by keyspace and key. All methods of Cache are thread safe.
+// Cache provides an in-memory cache for arbitrary binary data identified by keyspace and key. All methods of a
+// Cache object are thread safe.
 type Cache struct {
 	options     Options
 	maxItemSize int
@@ -53,15 +57,8 @@ func New(o Options) *Cache {
 		o.hashing = fnv.New64a
 	}
 
-	if o.maxProcs <= 0 {
-		o.maxProcs = runtime.NumCPU()
-		if o.maxProcs > runtime.GOMAXPROCS(-1) {
-			o.maxProcs = runtime.GOMAXPROCS(-1)
-		}
-	}
-
-	if o.MaxSize <= 0 {
-		o.MaxSize = DefaultMaxSize
+	if o.CacheSize <= 0 {
+		o.CacheSize = DefaultCacheSize
 	}
 
 	if o.SegmentSize <= 0 {
@@ -70,18 +67,28 @@ func New(o Options) *Cache {
 
 	if o.Notify == nil {
 		o.NotifyMask = 0
+	} else if o.NotifyMask == 0 {
+		o.NotifyMask = Normal
 	}
 
-	maxInstanceSize := o.MaxSize / o.maxProcs
-	maxInstanceSize -= maxInstanceSize % o.SegmentSize
-	segmentCount := maxInstanceSize / o.SegmentSize
+	instanceCount := o.maxInstanceCount
+	if instanceCount <= 0 {
+		instanceCount = runtime.NumCPU()
+		if instanceCount > runtime.GOMAXPROCS(-1) {
+			instanceCount = runtime.GOMAXPROCS(-1)
+		}
+	}
+
+	instanceSize := o.CacheSize / instanceCount
+	instanceSize -= instanceSize % o.SegmentSize
+	segmentCount := instanceSize / o.SegmentSize
 	if segmentCount == 0 {
-		o.maxProcs = 1
-		segmentCount = o.MaxSize / o.SegmentSize
-		maxInstanceSize = segmentCount * o.SegmentSize
+		instanceCount = 1
+		segmentCount = o.CacheSize / o.SegmentSize
+		instanceSize = segmentCount * o.SegmentSize
 	}
 
-	c := make([]*cache, o.maxProcs)
+	c := make([]*cache, instanceCount)
 	n := newNotify(o.Notify, o.NotifyMask)
 	for i := range c {
 		c[i] = newCache(segmentCount, o.SegmentSize, n)
@@ -89,7 +96,7 @@ func New(o Options) *Cache {
 
 	return &Cache{
 		options:     o,
-		maxItemSize: maxInstanceSize,
+		maxItemSize: instanceSize,
 		cache:       c,
 	}
 }
@@ -101,7 +108,7 @@ func (c *Cache) hash(key string) uint64 {
 }
 
 func (c *Cache) getCache(hash uint64) *cache {
-	// TODO: >> 32 for the fnv last byte thing, but not sure about it, needs testing of distribution
+	// TODO: >> 32 is here for the fnv last byte thing, but not sure about it, needs testing of distribution
 	return c.cache[int(hash>>32)%len(c.cache)]
 }
 
@@ -117,16 +124,7 @@ func (c *Cache) copy(to io.Writer, from io.Reader) (int64, error) {
 func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 	h := c.hash(key)
 	ci := c.getCache(h)
-
-	ci.mx.Lock()
-	defer ci.mx.Unlock()
-
-	if e, ok := ci.get(id{hash: h, keyspace: keyspace, key: key}); ok {
-		ci.status.incReaders(keyspace)
-		return newReader(ci, e, c.options.SegmentSize), true
-	}
-
-	return nil, false
+	return ci.get(h, keyspace, key)
 }
 
 // GetKey checks if a key is in the cache.
@@ -156,17 +154,6 @@ func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 	return b.Bytes(), err == nil
 }
 
-func setItem(c *cache, id id, ttl time.Duration) (*entry, error) {
-	c.mx.Lock()
-	defer c.mx.Unlock()
-	e, err := c.set(id, ttl)
-	if err != nil {
-		c.status.incWriters(id.keyspace)
-	}
-
-	return e, err
-}
-
 // Set creates a cache item and returns a writer that can be used to store the assocated data.
 // The writer returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item
 // reaches the maximum item size of the cache. The writer must be closed to indicate the end of data.
@@ -177,17 +164,7 @@ func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bo
 
 	h := c.hash(key)
 	ci := c.getCache(h)
-	id := id{hash: h, keyspace: keyspace, key: key}
-
-	for {
-		if e, err := setItem(ci, id, ttl); err == errAllocationFailed {
-			ci.waitRead()
-		} else if err != nil {
-			return nil, false
-		} else {
-			return newWriter(ci, e), true
-		}
-	}
+	return ci.set(h, keyspace, key, ttl)
 }
 
 // SetKey sets only a key without data.
@@ -218,31 +195,23 @@ func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) b
 func (c *Cache) Del(keyspace, key string) {
 	h := c.hash(key)
 	ci := c.getCache(h)
-	id := id{hash: h, keyspace: keyspace, key: key}
-
-	ci.mx.Lock()
-	defer ci.mx.Unlock()
-	ci.del(id)
+	ci.del(h, keyspace, key)
 }
 
-// Status returns statistics about the cache state.
-func (c *Cache) Status() *CacheStatus {
-	s := make([]*InstanceStatus, 0, len(c.cache))
+// Stats returns approximate statistics about the cache state.
+func (c *Cache) Stats() *CacheStats {
+	s := make([]*InstanceStats, 0, len(c.cache))
 	for _, ci := range c.cache {
-		s = append(s, ci.status)
+		s = append(s, ci.getStats())
 	}
 
-	return newCacheStatus(s)
+	return newCacheStats(s)
 }
 
 // Close shuts down the cache and releases resources.
 func (c *Cache) Close() {
 	for _, ci := range c.cache {
-		func() {
-			ci.mx.Lock()
-			defer ci.mx.Unlock()
-			ci.close()
-		}()
+		ci.close()
 	}
 }
 
@@ -290,11 +259,10 @@ func (s *SingleSpace) Del(key string) {
 // Close shuts down the cache and releases resource.
 func (s *SingleSpace) Close() { s.cache.Close() }
 
-// eviction from a single lru fails
 // refactor, documentation, examples
 // - naming
 // - list for buckets
-// - list of lists for lru round robin
+// - list of lists for lru round-robin
 // - locking closer to where the section needs to protected
 // - no blocking from notifications -> enforce min channel buffer
 // tests:

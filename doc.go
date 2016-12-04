@@ -53,7 +53,7 @@ reading from it can start immediately, even if the data to be cached was not yet
 reaches a point that the write hasn't reached yet, the read blocks and only continues once there is more data
 available.
 
-Status and Notifications
+Statistics and Notifications
 
 Forget provides notifications about its internal behavior for logging and monitoring purposes. The notifications
 can be received through a channel provided in the options. It is recommended to use a buffered channel to avoid

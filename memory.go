@@ -8,8 +8,9 @@ type segment struct {
 }
 
 type memory struct {
-	segments  *list
-	firstFree node
+	segmentCount, segmentSize int
+	segments                  *list
+	firstFree                 node
 }
 
 func newSegment(size int) *segment {
@@ -21,7 +22,8 @@ func (s *segment) next() node     { return s.nextSegment }
 func (s *segment) setPrev(p node) { s.prevSegment = p }
 func (s *segment) setNext(n node) { s.nextSegment = n }
 
-func (s *segment) equals(offset int, p []byte) (bool, int) {
+// checks only in the available range
+func (s *segment) bytesEqual(offset int, p []byte) (bool, int) {
 	available := len(s.data) - offset
 	if len(p) > available {
 		p = p[:available]
@@ -39,7 +41,12 @@ func (s *segment) write(offset int, p []byte) int {
 }
 
 func newMemory(segmentCount, segmentSize int) *memory {
-	m := &memory{segments: new(list)}
+	m := &memory{
+		segmentCount: segmentCount,
+		segmentSize:  segmentSize,
+		segments:     new(list),
+	}
+
 	for i := 0; i < segmentCount; i++ {
 		m.segments.insert(newSegment(segmentSize), nil)
 	}
@@ -49,13 +56,12 @@ func newMemory(segmentCount, segmentSize int) *memory {
 }
 
 func (m *memory) allocate() (*segment, bool) {
-	s, ok := m.firstFree.(*segment)
-	if !ok {
-		return nil, false
+	if s, ok := m.firstFree.(*segment); ok {
+		m.firstFree = s.next()
+		return s, true
 	}
 
-	m.firstFree = s.next()
-	return s, ok
+	return nil, false
 }
 
 func (m *memory) move(s *segment, before node) {

@@ -12,17 +12,11 @@ type list struct {
 	prevNode, nextNode node
 }
 
+// implements list of lists:
 func (l *list) prev() node     { return l.prevNode }
 func (l *list) next() node     { return l.nextNode }
 func (l *list) setPrev(p node) { l.prevNode = p }
 func (l *list) setNext(n node) { l.nextNode = n }
-
-func (l *list) firstLast() {
-	if l.first != nil {
-		l.first.setPrev(nil)
-		l.last.setNext(nil)
-	}
-}
 
 func (l *list) insertRange(first, last, before node) {
 	var prev node
@@ -38,17 +32,21 @@ func (l *list) insertRange(first, last, before node) {
 
 	if prev == nil {
 		l.first = first
+		if first != nil {
+			first.setPrev(nil)
+		}
 	} else {
 		prev.setNext(first)
 	}
 
 	if next == nil {
 		l.last = last
+		if last != nil {
+			last.setNext(nil)
+		}
 	} else {
 		next.setPrev(last)
 	}
-
-	l.firstLast()
 }
 
 func (l *list) removeRange(first, last node) {
@@ -56,17 +54,31 @@ func (l *list) removeRange(first, last node) {
 
 	if prev == nil {
 		l.first = next
+		if next != nil {
+			next.setPrev(nil)
+		}
 	} else {
 		prev.setNext(next)
 	}
 
 	if next == nil {
 		l.last = prev
+		if prev != nil {
+			prev.setNext(nil)
+		}
 	} else {
 		next.setPrev(prev)
 	}
+}
 
-	l.firstLast()
+func (l *list) rotate(at node) {
+	if at == nil || l.empty() {
+		return
+	}
+
+	from := l.first
+	l.removeRange(from, at)
+	l.insertRange(from, at, nil)
 }
 
 func (l *list) insert(n, before node) { l.insertRange(n, n, before) }

@@ -2,27 +2,21 @@ package forget
 
 import (
 	"errors"
+	"io"
 	"sync"
 	"time"
 )
 
-// temporary structure to pass the keyspace, key and its hash around during individual calls
-type id struct {
-	hash          uint64
-	keyspace, key string
-}
-
 type cache struct {
-	segmentCount, segmentSize, lruOffset int
-	mx                                   *sync.RWMutex
-	readCond                             *sync.Cond
-	memory                               *memory
-	toDelete                             *list
-	lruLookup                            map[string]*list
-	lruList                              *list
-	hash                                 [][]*entry
-	closed                               bool
-	status                               *InstanceStatus
+	mx           *sync.RWMutex
+	readDoneCond *sync.Cond
+	memory       *memory
+	deleteQueue  *list
+	lruLookup    map[string]*list
+	lruRotate    *list
+	itemLookup   [][]*item
+	closed       bool
+	stats        *InstanceStats
 }
 
 var (
@@ -34,28 +28,22 @@ var (
 
 func newCache(segmentCount, segmentSize int, notify *notify) *cache {
 	return &cache{
-		segmentCount: segmentCount,
-		segmentSize:  segmentSize,
 		mx:           &sync.RWMutex{},
-		readCond:     sync.NewCond(&sync.Mutex{}),
+		readDoneCond: sync.NewCond(&sync.Mutex{}),
 		memory:       newMemory(segmentCount, segmentSize),
 		lruLookup:    make(map[string]*list),
-		lruList:      new(list),
-		toDelete:     new(list),
-		hash:         make([][]*entry, segmentCount), // there cannot be more entries than segments
-		status:       newInstanceStatus(segmentSize, segmentCount*segmentSize, notify),
+		lruRotate:    &list{},
+		deleteQueue:  &list{},
+		itemLookup:   make([][]*item, segmentCount), // there cannot be more entries than segments
+		stats:        newInstanceStats(segmentSize, segmentCount*segmentSize, notify),
 	}
 }
 
-func (c *cache) bucketIndex(hash uint64) int {
-	return int(hash % uint64(c.segmentCount))
-}
-
-func (c *cache) evictFromFor(l *list, e *entry) bool {
-	current := l.first
+func (c *cache) evictForFrom(i *item, lru *list) bool {
+	current := lru.first
 	for current != nil {
-		if current != e && c.deleteEntry(current.(*entry)) {
-			c.status.evict(e.keyspace, e.size)
+		if currentItem := current.(*item); currentItem != i && c.deleteItem(currentItem) {
+			c.stats.notifyEvict(currentItem.keyspace, currentItem.size)
 			return true
 		}
 
@@ -65,36 +53,27 @@ func (c *cache) evictFromFor(l *list, e *entry) bool {
 	return false
 }
 
-func (c *cache) rotateLRUs(at node) {
-	if at == nil || c.lruList.empty() {
-		return
-	}
-
-	from := c.lruList.first
-	c.lruList.removeRange(from, at)
-	c.lruList.insertRange(from, at, nil)
-}
-
-func (c *cache) evictFor(e *entry) bool {
-	if c.evictFromFor(c.toDelete, e) {
+func (c *cache) evictFor(i *item) bool {
+	if c.evictForFrom(i, c.deleteQueue) {
 		return true
 	}
 
-	initial, ok := c.lruLookup[e.keyspace]
-	if ok && c.evictFromFor(initial, e) {
+	keyspaceLRU, ok := c.lruLookup[i.keyspace]
+	if ok && c.evictForFrom(i, keyspaceLRU) {
 		return true
 	}
 
-	// round robin the rest to evict one item
-	lru, _ := c.lruList.first.(*list)
+	// round-robin the rest to evict one item
+	lru, _ := c.lruRotate.first.(*list)
 	for lru != nil {
-		if lru != initial && c.evictFromFor(lru, e) {
+		if lru != keyspaceLRU && c.evictForFrom(i, lru) {
 			var rotateAt node = lru
 			if lru.empty() {
+				// if empty, it was also removed
 				rotateAt = rotateAt.prev()
 			}
 
-			c.rotateLRUs(rotateAt)
+			c.lruRotate.rotate(rotateAt)
 			return true
 		}
 
@@ -104,213 +83,259 @@ func (c *cache) evictFor(e *entry) bool {
 	return false
 }
 
-func (c *cache) allocateFor(e *entry) error {
-	_, last := e.data()
-	for {
-		if s, ok := c.memory.allocate(); ok {
-			if last != nil && s != last.next() {
-				c.memory.move(s, last.next())
-			}
-
-			e.appendSegment(s)
-			return nil
-		}
-
-		if !c.evictFor(e) {
-			c.status.allocFailed(e.keyspace)
-			return errAllocationFailed
-		}
+func (c *cache) allocateOnce(i *item) bool {
+	s, ok := c.memory.allocate()
+	if !ok {
+		return false
 	}
+
+	_, last := i.data()
+	if last != nil && s != last.next() {
+		c.memory.move(s, last.next())
+	}
+
+	i.appendSegment(s)
+	return true
 }
 
-func (c *cache) writeKey(e *entry, key string) error {
+func (c *cache) allocateFor(i *item) error {
+	if c.allocateOnce(i) {
+		return nil
+	}
+
+	if c.evictFor(i) {
+		c.allocateOnce(i)
+		return nil
+	}
+
+	c.stats.notifyAllocFailed(i.keyspace)
+	return errAllocationFailed
+}
+
+func (c *cache) writeKey(i *item, key string) error {
 	p := []byte(key)
 	for len(p) > 0 {
-		if err := c.allocateFor(e); err != nil {
+		if err := c.allocateFor(i); err != nil {
 			return err
 		}
 
-		n, _ := e.write(p)
+		n, _ := i.write(p)
 		p = p[n:]
 	}
 
 	return nil
 }
 
-func (c *cache) lookup(id id) (*entry, bool) {
-	for _, e := range c.hash[c.bucketIndex(id.hash)] {
-		if e.keyspace == id.keyspace && e.keyEquals(id.key) {
-			return e, true
+func (c *cache) bucketIndex(hash uint64) int {
+	return int(hash % uint64(len(c.itemLookup)))
+}
+
+func (c *cache) lookup(hash uint64, keyspace, key string) (*item, bool) {
+	for _, i := range c.itemLookup[c.bucketIndex(hash)] {
+		if i.keyspace == keyspace && i.keyEquals(key) {
+			return i, true
 		}
 	}
 
 	return nil, false
 }
 
-func (c *cache) addLookup(id id, e *entry) {
-	index := c.bucketIndex(id.hash)
-	c.hash[index] = append(c.hash[index], e)
+func (c *cache) addLookup(hash uint64, i *item) {
+	index := c.bucketIndex(hash)
+	c.itemLookup[index] = append(c.itemLookup[index], i)
 }
 
-func (c *cache) touchEntry(e *entry) {
-	c.lruLookup[e.keyspace].remove(e)
-	c.lruLookup[e.keyspace].insert(e, nil)
+func (c *cache) touchItem(i *item) {
+	c.lruLookup[i.keyspace].remove(i)
+	c.lruLookup[i.keyspace].insert(i, nil)
 }
 
 func (c *cache) removeKeyspaceLRU(lru *list, keyspace string) {
 	delete(c.lruLookup, keyspace)
-	c.lruList.remove(lru)
+	c.lruRotate.remove(lru)
 }
 
 func (c *cache) keyspaceLRU(keyspace string) *list {
 	lru := c.lruLookup[keyspace]
 	if lru == nil {
-		lru = new(list)
+		lru = &list{}
 		c.lruLookup[keyspace] = lru
-		c.lruList.insert(lru, nil)
+		c.lruRotate.insert(lru, nil)
 	}
 
 	return lru
 }
 
-func (c *cache) deleteLookup(e *entry) bool {
-	index := c.bucketIndex(e.hash)
-	bucket := c.hash[index]
-	for i, ei := range bucket {
-		if ei == e {
+func (c *cache) deleteLookup(i *item) bool {
+	bi := c.bucketIndex(i.hash)
+	bucket := c.itemLookup[bi]
+	for bii, ii := range bucket {
+		if ii == i {
 			last := len(bucket) - 1
-			bucket[last], bucket[i], bucket = nil, bucket[last], bucket[:last]
-			c.hash[index] = bucket
+			bucket[last], bucket[bii], bucket = nil, bucket[last], bucket[:last]
+			c.itemLookup[bi] = bucket
 			return true
 		}
 	}
 
 	// false means that it was already deleted from the lookup
-	// but there were active readers at the time
+	// but there were active readers at the time, to be found
+	// in the delete queue
 	return false
 }
 
-func (c *cache) deleteEntry(e *entry) bool {
-	if c.deleteLookup(e) {
-		lru := c.lruLookup[e.keyspace]
-		lru.remove(e)
+func (c *cache) deleteItem(i *item) bool {
+	if c.deleteLookup(i) {
+		lru := c.lruLookup[i.keyspace]
+		lru.remove(i)
 		if lru.empty() {
-			c.removeKeyspaceLRU(lru, e.keyspace)
+			c.removeKeyspaceLRU(lru, i.keyspace)
 		}
 
-		if e.reading > 0 {
-			c.toDelete.insert(e, nil)
-			c.status.incReadersOnDeleted(e.keyspace)
+		if i.readers > 0 {
+			c.deleteQueue.insert(i, nil)
+			c.stats.incReadersOnDeleted(i.keyspace)
 			return false
 		}
 	} else {
-		if e.reading > 0 {
+		if i.readers > 0 {
 			return false
 		}
 
-		c.toDelete.remove(e)
-		c.status.decReadersOnDeleted(e.keyspace)
+		c.deleteQueue.remove(i)
+		c.stats.decReadersOnDeleted(i.keyspace)
 	}
 
-	first, last := e.data()
+	first, last := i.data()
 	if first != nil {
 		c.memory.free(first, last)
 	}
 
-	e.close()
-	c.status.itemDeleted(e)
+	i.close()
+	c.stats.deleteItem(i)
 	return true
 }
 
-func (c *cache) get(id id) (*entry, bool) {
+func (c *cache) get(hash uint64, keyspace, key string) (io.ReadCloser, bool) {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
 	if c.closed {
 		return nil, false
 	}
 
-	e, ok := c.lookup(id)
+	i, ok := c.lookup(hash, keyspace, key)
 	if !ok {
-		c.status.miss(id.keyspace, id.key)
+		c.stats.notifyMiss(keyspace, key)
 		return nil, false
 	}
 
-	if e.expired() {
-		c.deleteEntry(e)
-		c.status.expire(id.keyspace, id.key, e.size)
+	if i.expired() {
+		c.deleteItem(i)
+		c.stats.notifyExpire(keyspace, key, i.size)
 		return nil, false
 	}
 
-	c.touchEntry(e)
-	e.reading++
-	c.status.hit(id.keyspace, id.key)
-	return e, ok
+	c.touchItem(i)
+	i.readers++
+	c.stats.notifyHit(keyspace, key)
+	c.stats.incReaders(keyspace)
+	return newReader(c, i), true
 }
 
-func (c *cache) set(id id, ttl time.Duration) (*entry, error) {
+func (c *cache) createItem(hash uint64, keyspace, key string, ttl time.Duration) (*item, error) {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
 	if c.closed {
 		return nil, ErrCacheClosed
 	}
 
-	c.del(id)
-	e := newEntry(id.hash, id.keyspace, len(id.key), ttl)
+	c.deleteIfExists(hash, keyspace, key)
+	i := newItem(hash, keyspace, len(key), ttl)
 
-	if err := c.writeKey(e, id.key); err != nil {
+	if err := c.writeKey(i, key); err != nil {
 		return nil, err
 	}
 
-	lru := c.keyspaceLRU(e.keyspace)
-	lru.insert(e, nil)
-	c.addLookup(id, e)
-	c.status.itemAdded(e)
-	c.status.set(id.keyspace, id.key, e.keySize)
+	lru := c.keyspaceLRU(i.keyspace)
+	lru.insert(i, nil)
+	c.addLookup(hash, i)
 
-	return e, nil
+	c.stats.addItem(i)
+	c.stats.notifySet(keyspace, key, i.keySize)
+	c.stats.incWriters(keyspace)
+
+	return i, nil
 }
 
-func (c *cache) del(id id) {
+func (c *cache) set(hash uint64, keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
+	for {
+		if i, err := c.createItem(hash, keyspace, key, ttl); err == errAllocationFailed {
+			// waiting to be able to store the key
+			// condition checking happens during writing they key
+			c.readDoneCond.L.Lock()
+			c.readDoneCond.Wait()
+			c.readDoneCond.L.Unlock()
+		} else if err != nil {
+			return nil, false
+		} else {
+			return newWriter(c, i), true
+		}
+	}
+}
+
+func (c *cache) deleteIfExists(hash uint64, keyspace, key string) {
+	if i, ok := c.lookup(hash, keyspace, key); ok {
+		c.deleteItem(i)
+		c.stats.notifyDelete(keyspace, key, i.size)
+	}
+}
+
+func (c *cache) del(hash uint64, keyspace, key string) {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
 	if c.closed {
 		return
 	}
 
-	if e, ok := c.lookup(id); ok {
-		c.deleteEntry(e)
-		c.status.del(id.keyspace, id.key, e.size)
-	}
+	c.deleteIfExists(hash, keyspace, key)
 }
 
-func (c *cache) waitRead() {
-	c.readCond.L.Lock()
-	c.readCond.Wait()
-	c.readCond.L.Unlock()
-}
-
-func (c *cache) broadcastRead() {
-	c.readCond.Broadcast()
+func (c *cache) getStats() *InstanceStats {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+	return c.stats.clone()
 }
 
 func (c *cache) closeAll(l *list) {
-	e := l.first
-	for e != nil {
-		e.(*entry).close()
-		e = e.next()
+	i := l.first
+	for i != nil {
+		i.(*item).close()
+		i = i.next()
 	}
 }
 
 func (c *cache) close() {
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
 	if c.closed {
 		return
 	}
 
-	c.closeAll(c.toDelete)
-	lru := c.lruList.first
+	c.closeAll(c.deleteQueue)
+	lru := c.lruRotate.first
 	for lru != nil {
 		c.closeAll(lru.(*list))
 		lru = lru.next()
 	}
 
 	c.memory = nil
-	c.memory = nil
-	c.toDelete = nil
+	c.deleteQueue = nil
 	c.lruLookup = nil
-	c.hash = nil
+	c.itemLookup = nil
+
 	c.closed = true
 }

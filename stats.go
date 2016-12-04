@@ -54,8 +54,8 @@ type notify struct {
 	listener chan<- *Event
 }
 
-// Status objects contain cache statistics about keyspaces, internal cache instances or the complete cache.
-type Status struct {
+// Stats objects contain cache statistics about keyspaces, internal cache instances or the complete cache.
+type Stats struct {
 	ItemCount        int
 	EffectiveSize    int
 	UsedSize         int
@@ -65,21 +65,21 @@ type Status struct {
 	WritersBlocked   int
 }
 
-// InstanceStatus objects contain statistics about an internal cache instance.
-type InstanceStatus struct {
-	Total           *Status
+// InstanceStats objects contain statistics about an internal cache instance.
+type InstanceStats struct {
+	Total           *Stats
 	AvailableMemory int
-	Keyspaces       map[string]*Status
+	Keyspaces       map[string]*Stats
 	segmentSize     int
 	notify          *notify
 }
 
-// CacheStatus objects contain statistics about the cache, including the internal cache instnaces and keyspaces.
-type CacheStatus struct {
-	Total           *Status
+// CacheStats objects contain statistics about the cache, including the internal cache instnaces and keyspaces.
+type CacheStats struct {
+	Total           *Stats
 	AvailableMemory int
-	Keyspaces       map[string]*Status
-	Instances       []*InstanceStatus
+	Keyspaces       map[string]*Stats
+	Instances       []*InstanceStats
 }
 
 func (et EventType) String() string {
@@ -120,6 +120,46 @@ func (et EventType) String() string {
 	}
 }
 
+// Is checks if an EventType flag is set.
+func (et EventType) Is(test EventType) bool {
+	return et&test != 0
+}
+
+func newNotify(listener chan<- *Event, mask EventType) *notify {
+	return &notify{
+		listener: listener,
+		mask:     mask,
+	}
+}
+
+func (n *notify) send(i *Event) {
+	if n.mask&i.Type == 0 {
+		return
+	}
+
+	n.listener <- i
+}
+
+func (s *Stats) add(d *Stats) {
+	s.ItemCount += d.ItemCount
+	s.EffectiveSize += d.EffectiveSize
+	s.UsedSize += d.UsedSize
+	s.Readers += d.Readers
+	s.ReadersOnDeleted += d.ReadersOnDeleted
+	s.Writers += d.Writers
+	s.WritersBlocked += d.WritersBlocked
+}
+
+func newInstanceStats(segmentSize, availableMemory int, n *notify) *InstanceStats {
+	return &InstanceStats{
+		Total:           &Stats{},
+		AvailableMemory: availableMemory,
+		Keyspaces:       make(map[string]*Stats),
+		segmentSize:     segmentSize,
+		notify:          n,
+	}
+}
+
 func usedSize(size, offset, segmentSize int) int {
 	size += offset % segmentSize
 	usedSize := (size / segmentSize) * segmentSize
@@ -130,46 +170,11 @@ func usedSize(size, offset, segmentSize int) int {
 	return usedSize
 }
 
-func newNotify(listener chan<- *Event, mask EventType) *notify {
-	return &notify{
-		listener: listener,
-		mask:     mask,
-	}
+func (s *InstanceStats) sendEvent(i *Event) {
+	s.notify.send(i)
 }
 
-func (n *notify) send(e *Event) {
-	if n.mask&e.Type == 0 {
-		return
-	}
-
-	n.listener <- e
-}
-
-func (s *Status) add(d *Status) {
-	s.ItemCount += d.ItemCount
-	s.EffectiveSize += d.EffectiveSize
-	s.UsedSize += d.UsedSize
-	s.Readers += d.Readers
-	s.ReadersOnDeleted += d.ReadersOnDeleted
-	s.Writers += d.Writers
-	s.WritersBlocked += d.WritersBlocked
-}
-
-func newInstanceStatus(segmentSize, availableMemory int, n *notify) *InstanceStatus {
-	return &InstanceStatus{
-		Total:           new(Status),
-		AvailableMemory: availableMemory,
-		Keyspaces:       make(map[string]*Status),
-		segmentSize:     segmentSize,
-		notify:          n,
-	}
-}
-
-func (s *InstanceStatus) sendEvent(e *Event) {
-	s.notify.send(e)
-}
-
-func (s *InstanceStatus) hit(keyspace, key string) {
+func (s *InstanceStats) notifyHit(keyspace, key string) {
 	s.sendEvent(&Event{
 		Type:     Hit,
 		Keyspace: keyspace,
@@ -177,7 +182,7 @@ func (s *InstanceStatus) hit(keyspace, key string) {
 	})
 }
 
-func (s *InstanceStatus) miss(keyspace, key string) {
+func (s *InstanceStats) notifyMiss(keyspace, key string) {
 	s.sendEvent(&Event{
 		Type:     Miss,
 		Keyspace: keyspace,
@@ -185,7 +190,7 @@ func (s *InstanceStatus) miss(keyspace, key string) {
 	})
 }
 
-func (s *InstanceStatus) set(keyspace, key string, keySize int) {
+func (s *InstanceStats) notifySet(keyspace, key string, keySize int) {
 	s.sendEvent(&Event{
 		Type:                Set,
 		Keyspace:            keyspace,
@@ -195,7 +200,7 @@ func (s *InstanceStatus) set(keyspace, key string, keySize int) {
 	})
 }
 
-func (s *InstanceStatus) writeComplete(keyspace string, keySize, contentSize int) {
+func (s *InstanceStats) notifyWriteComplete(keyspace string, keySize, contentSize int) {
 	s.sendEvent(&Event{
 		Type:                WriteComplete,
 		Keyspace:            keyspace,
@@ -204,7 +209,7 @@ func (s *InstanceStatus) writeComplete(keyspace string, keySize, contentSize int
 	})
 }
 
-func (s *InstanceStatus) remove(typ EventType, keyspace, key string, size int) {
+func (s *InstanceStats) notifyRemove(typ EventType, keyspace, key string, size int) {
 	s.sendEvent(&Event{
 		Type:                typ,
 		Keyspace:            keyspace,
@@ -214,90 +219,96 @@ func (s *InstanceStatus) remove(typ EventType, keyspace, key string, size int) {
 	})
 }
 
-func (s *InstanceStatus) del(keyspace, key string, size int) { s.remove(Delete, keyspace, key, size) }
-func (s *InstanceStatus) expire(keyspace, key string, size int) {
-	s.remove(Expire|Delete|Miss, keyspace, key, size)
+func (s *InstanceStats) notifyDelete(keyspace, key string, size int) {
+	s.notifyRemove(Delete, keyspace, key, size)
 }
-func (s *InstanceStatus) evict(keyspace string, size int) { s.remove(Evict|Delete, keyspace, "", size) }
 
-func (s *InstanceStatus) allocFailed(keyspace string) {
+func (s *InstanceStats) notifyExpire(keyspace, key string, size int) {
+	s.notifyRemove(Expire|Delete|Miss, keyspace, key, size)
+}
+
+func (s *InstanceStats) notifyEvict(keyspace string, size int) {
+	s.notifyRemove(Evict|Delete, keyspace, "", size)
+}
+
+func (s *InstanceStats) notifyAllocFailed(keyspace string) {
 	s.sendEvent(&Event{
 		Type:     AllocFailed,
 		Keyspace: keyspace,
 	})
 }
 
-func (s *InstanceStatus) updateStatus(e *entry, mod int) {
-	size := e.size * mod
-	usedSize := usedSize(e.size, 0, s.segmentSize) * mod
+func (s *InstanceStats) itemChange(i *item, mod int) {
+	size := i.size * mod
+	usedSize := usedSize(i.size, 0, s.segmentSize) * mod
 
 	s.Total.ItemCount += mod
 	s.Total.EffectiveSize += size
 	s.Total.UsedSize += usedSize
 	s.AvailableMemory -= usedSize
 
-	ks := s.Keyspaces[e.keyspace]
+	ks := s.Keyspaces[i.keyspace]
 	ks.ItemCount += mod
 	ks.EffectiveSize += size
 	ks.UsedSize += usedSize
 }
 
-func (s *InstanceStatus) itemAdded(e *entry) {
-	if _, ok := s.Keyspaces[e.keyspace]; !ok {
-		s.Keyspaces[e.keyspace] = new(Status)
+func (s *InstanceStats) addItem(i *item) {
+	if _, ok := s.Keyspaces[i.keyspace]; !ok {
+		s.Keyspaces[i.keyspace] = &Stats{}
 	}
 
-	s.updateStatus(e, 1)
+	s.itemChange(i, 1)
 }
 
-func (s *InstanceStatus) itemDeleted(e *entry) {
-	s.updateStatus(e, -1)
-	if s.Keyspaces[e.keyspace].ItemCount == 0 {
-		delete(s.Keyspaces, e.keyspace)
+func (s *InstanceStats) deleteItem(i *item) {
+	s.itemChange(i, -1)
+	if s.Keyspaces[i.keyspace].ItemCount == 0 {
+		delete(s.Keyspaces, i.keyspace)
 	}
 }
 
-func (s *InstanceStatus) addReaders(keyspace string, d int) {
+func (s *InstanceStats) readersChange(keyspace string, d int) {
 	s.Total.Readers += d
 	if ks, ok := s.Keyspaces[keyspace]; ok {
 		ks.Readers += d
 	}
 }
 
-func (s *InstanceStatus) addReadersOnDeleted(keyspace string, d int) {
+func (s *InstanceStats) readersOnDeletedChange(keyspace string, d int) {
 	s.Total.ReadersOnDeleted += d
 	if ks, ok := s.Keyspaces[keyspace]; ok {
 		ks.ReadersOnDeleted += d
 	}
 }
 
-func (s *InstanceStatus) addWriters(keyspace string, d int) {
+func (s *InstanceStats) writersChange(keyspace string, d int) {
 	s.Total.Writers += d
 	if ks, ok := s.Keyspaces[keyspace]; ok {
 		ks.Writers += d
 	}
 }
 
-func (s *InstanceStatus) addWritersBlocked(keyspace string, d int) {
+func (s *InstanceStats) blockedWritersChange(keyspace string, d int) {
 	s.Total.WritersBlocked += d
 	if ks, ok := s.Keyspaces[keyspace]; ok {
 		ks.WritersBlocked += d
 	}
 }
 
-func (s *InstanceStatus) incReaders(keyspace string)          { s.addReaders(keyspace, 1) }
-func (s *InstanceStatus) decReaders(keyspace string)          { s.addReaders(keyspace, -1) }
-func (s *InstanceStatus) incReadersOnDeleted(keyspace string) { s.addReadersOnDeleted(keyspace, 1) }
-func (s *InstanceStatus) decReadersOnDeleted(keyspace string) { s.addReadersOnDeleted(keyspace, -1) }
-func (s *InstanceStatus) incWriters(keyspace string)          { s.addWriters(keyspace, 1) }
-func (s *InstanceStatus) decWriters(keyspace string)          { s.addWriters(keyspace, -1) }
-func (s *InstanceStatus) incWritersBlocked(keyspace string)   { s.addWritersBlocked(keyspace, 1) }
-func (s *InstanceStatus) decWritersBlocked(keyspace string)   { s.addWritersBlocked(keyspace, -1) }
+func (s *InstanceStats) incReaders(keyspace string)          { s.readersChange(keyspace, 1) }
+func (s *InstanceStats) decReaders(keyspace string)          { s.readersChange(keyspace, -1) }
+func (s *InstanceStats) incReadersOnDeleted(keyspace string) { s.readersOnDeletedChange(keyspace, 1) }
+func (s *InstanceStats) decReadersOnDeleted(keyspace string) { s.readersOnDeletedChange(keyspace, -1) }
+func (s *InstanceStats) incWriters(keyspace string)          { s.writersChange(keyspace, 1) }
+func (s *InstanceStats) decWriters(keyspace string)          { s.writersChange(keyspace, -1) }
+func (s *InstanceStats) incWritersBlocked(keyspace string)   { s.blockedWritersChange(keyspace, 1) }
+func (s *InstanceStats) decWritersBlocked(keyspace string)   { s.blockedWritersChange(keyspace, -1) }
 
-func (s *InstanceStatus) clone() *InstanceStatus {
-	sc := &InstanceStatus{
+func (s *InstanceStats) clone() *InstanceStats {
+	sc := &InstanceStats{
 		AvailableMemory: s.AvailableMemory,
-		Keyspaces:       make(map[string]*Status),
+		Keyspaces:       make(map[string]*Stats),
 	}
 
 	st := *s.Total
@@ -311,21 +322,21 @@ func (s *InstanceStatus) clone() *InstanceStatus {
 	return sc
 }
 
-func newCacheStatus(i []*InstanceStatus) *CacheStatus {
-	s := &CacheStatus{
-		Total:     &Status{},
-		Keyspaces: make(map[string]*Status),
-		Instances: make([]*InstanceStatus, 0, len(i)),
+func newCacheStats(i []*InstanceStats) *CacheStats {
+	s := &CacheStats{
+		Total:     &Stats{},
+		Keyspaces: make(map[string]*Stats),
+		Instances: make([]*InstanceStats, 0, len(i)),
 	}
 
 	for _, ii := range i {
 		s.Total.add(ii.Total)
 		s.AvailableMemory += ii.AvailableMemory
-		s.Instances = append(s.Instances, ii.clone())
+		s.Instances = append(s.Instances, ii)
 
 		for k, ks := range ii.Keyspaces {
 			if _, ok := s.Keyspaces[k]; !ok {
-				s.Keyspaces[k] = new(Status)
+				s.Keyspaces[k] = &Stats{}
 			}
 
 			s.Keyspaces[k].add(ks)

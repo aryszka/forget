@@ -12,7 +12,7 @@ import (
 
 const (
 	emulateMultiCoreMode = 4
-	maxSize              = 1 << 30
+	cacheSize            = 1 << 30
 	segmentSize          = 1 << 10
 )
 
@@ -101,7 +101,11 @@ func benchmark(b *testing.B, parallel, itemCount, concurrent int, create func(Op
 		initRandom()
 	}
 
-	c := createCache(itemCount, Options{MaxSize: maxSize, SegmentSize: segmentSize, maxProcs: parallel}, create)
+	c := createCache(itemCount, Options{
+		CacheSize:        cacheSize,
+		SegmentSize:      segmentSize,
+		maxInstanceCount: parallel,
+	}, create)
 	defer c.Close()
 
 	b.ResetTimer()
