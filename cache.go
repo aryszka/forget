@@ -39,11 +39,16 @@ func newCache(segmentCount, segmentSize int, notify *notify) *cache {
 	}
 }
 
-// tries to evict one item from an lru list, other than the one in the args and with a size greater than 0
+// tries to evict one item from an lru list, other than the one in the args, with a size greater than 0 and has
+// no active readers.
+//
+// TODO: this is not very self documenting. Current readers is checked but not writeComplete.
 func (c *cache) evictForFrom(i *item, lru *list) bool {
 	current := lru.first
 	for current != nil {
-		if currentItem := current.(*item); currentItem != i && currentItem.size > 0 && c.deleteItem(currentItem) {
+		if currentItem := current.(*item); currentItem != i && currentItem.size > 0 &&
+			currentItem.readers == 0 && c.deleteItem(currentItem) {
+
 			c.stats.notifyEvict(currentItem.keyspace, currentItem.size)
 			return true
 		}
@@ -56,7 +61,7 @@ func (c *cache) evictForFrom(i *item, lru *list) bool {
 
 // tries to evict one item, other than the one in the args. First tries from the temporary deleted items,
 // checking if no reader is blocking them anymore. Next tries in the item's own keyspace. Last tries all other
-// namespaces in a round-robin fashion.
+// keyspaces in a round-robin fashion
 func (c *cache) evictFor(i *item) bool {
 	if c.evictForFrom(i, c.deleteQueue) {
 		return true
@@ -192,6 +197,8 @@ func (c *cache) deleteLookup(i *item) bool {
 
 // deletes an item. If it has active readers, it preserves it in the queue of deleted items. If it can be
 // completely deleted, releases the allocated memory for the item
+//
+// TODO: examine the different cases of delete
 func (c *cache) deleteItem(i *item) bool {
 	if c.deleteLookup(i) {
 		lru := c.lruLookup[i.keyspace]
@@ -200,7 +207,9 @@ func (c *cache) deleteItem(i *item) bool {
 			c.removeKeyspaceLRU(lru, i.keyspace)
 		}
 
-		if i.readers > 0 {
+		// TODO: this is not very self documenting. WriteComplete is only checked for allowing
+		// cancelling cache fill
+		if i.writeComplete && i.readers > 0 {
 			c.deleteQueue.insert(i, nil)
 			c.stats.incReadersOnDeleted(i.keyspace)
 			return false

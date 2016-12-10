@@ -273,6 +273,7 @@ func (s *SingleSpace) Del(key string) {
 func (s *SingleSpace) Close() { s.cache.Close() }
 
 // docs
+// - document write cancellable with delete for cancelling cache filling
 // tests:
 // - tests based on the documentation
 // - tests based on the code

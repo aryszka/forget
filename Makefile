@@ -14,7 +14,7 @@ check: build
 	go test -race
 
 shortcheck: build
-	go test -test.short
+	go test -test.short -run ^Test
 
 bench: build
 	go test -cpuprofile cpu.out -memprofile mem.out -bench .

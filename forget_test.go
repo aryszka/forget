@@ -1354,6 +1354,10 @@ func TestStats(t *testing.T) {
 }
 
 func TestNotifications(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
 	receive := func(t *testing.T, n <-chan *Event, expect EventType) {
 		if e := <-n; e.Type != expect {
 			t.Errorf("failed to receive the expected event. Got: %s, expected: %s.\n", e.Type, expect)
