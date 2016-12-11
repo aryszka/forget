@@ -2,7 +2,6 @@ package forget
 
 import (
 	"errors"
-	"io"
 	"sync"
 	"time"
 )
@@ -276,7 +275,7 @@ func (s *segment) touchItem(i *item) {
 
 // tries to find an item based on its hash, key and keyspace. If found but expired, deletes it. When finds a
 // valid item, it sets the item as the most recently used one in the LRU list of the keyspace
-func (s *segment) get(hash uint64, keyspace, key string) (io.ReadCloser, bool) {
+func (s *segment) get(hash uint64, keyspace, key string) (*Reader, bool) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
@@ -327,7 +326,7 @@ func (s *segment) writeKey(i *item, key string) error {
 // tries to create a new item. If one exists with the same keyspace and key, it deletes it. Stores the item in
 // the lookup table and the LRU list of the keyspace. If memory cannot be allocated for the item key due to
 // active readers holding too many existing items, it fails
-func (s *segment) trySet(hash uint64, keyspace, key string, ttl time.Duration) (io.WriteCloser, error) {
+func (s *segment) trySet(hash uint64, keyspace, key string, ttl time.Duration) (*Writer, error) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
@@ -369,7 +368,7 @@ func (s *segment) trySet(hash uint64, keyspace, key string, ttl time.Duration) (
 
 // creates a new item. If the item key cannot be stored due to active readers holding too many existing items,
 // it blocks, and waits for the next reader to signal that it's done
-func (s *segment) set(hash uint64, keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
+func (s *segment) set(hash uint64, keyspace, key string, ttl time.Duration) (*Writer, bool) {
 	for {
 		if w, err := s.trySet(hash, keyspace, key, ttl); err == errAllocationFailed {
 			// waiting to be able to store the key

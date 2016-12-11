@@ -22,11 +22,25 @@ type cacheIFace interface {
 	Close()
 }
 
+type forgetCache struct {
+	cache *Cache
+}
+
 type buffer struct {
 	buf *bytes.Buffer
 }
 
 type baselineMap map[string]*buffer
+
+func (f forgetCache) Get(keyspace, key string) (io.ReadCloser, bool) {
+	return f.cache.Get(keyspace, key)
+}
+
+func (f forgetCache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
+	return f.cache.Set(keyspace, key, ttl)
+}
+
+func (f forgetCache) Close() { f.cache.Close() }
 
 func (b *buffer) Read(p []byte) (int, error)  { return b.buf.Read(p) }
 func (b *buffer) Write(p []byte) (int, error) { return b.buf.Write(p) }
@@ -132,7 +146,7 @@ func executeSet(c cacheIFace, key string) {
 	}
 }
 
-func newForget(o Options) cacheIFace { return New(o) }
+func newForget(o Options) cacheIFace { return forgetCache{New(o)} }
 
 func benchmarkRange(b *testing.B, parallel, concurrent int, create func(Options) cacheIFace, execute func(cacheIFace)) {
 	for _, itemCount := range []int{0, 10, 1000, 100000} {

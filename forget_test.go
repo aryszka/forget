@@ -464,6 +464,16 @@ func TestReadZero(t *testing.T) {
 	}
 }
 
+func TestReadFromItemWithLongKey(t *testing.T) {
+	c := New(Options{CacheSize: 9, ChunkSize: 3, maxSegmentCount: 1})
+	defer c.Close()
+
+	c.SetBytes("s1", "12345", []byte{1, 2, 3}, time.Hour)
+	if b, ok := c.GetBytes("s1", "12345"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+		t.Error("failed to read item data")
+	}
+}
+
 func TestWriteZero(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
@@ -1955,6 +1965,200 @@ func TestEvictFromDeleted(t *testing.T) {
 		c.SetBytes("s1", "baz", []byte{4, 5, 6}, time.Hour)
 		if !c.GetKey("s1", "baz") {
 			t.Error("failed to create item")
+		}
+	})
+}
+
+func TestSeek(t *testing.T) {
+	t.Run("seek and read", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3, 4, 5, 6}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		if offset, err := r.Seek(2, io.SeekStart); err != nil || offset != 2 {
+			t.Error("seek failed", offset, err)
+			return
+		}
+
+		p := make([]byte, 3)
+		if n, err := r.Read(p); err != nil || n != 3 || !bytes.Equal(p, []byte{3, 4, 5}) {
+			t.Error("read failed", n, err, p)
+		}
+	})
+
+	t.Run("seek and read to end", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		if offset, err := r.Seek(2, io.SeekStart); err != nil || offset != 2 {
+			t.Error("seek failed", offset, err)
+			return
+		}
+
+		p := make([]byte, 3)
+		if n, err := r.Read(p); err != io.EOF || n != 1 || p[0] != 3 {
+			t.Error("read failed", n, err)
+		}
+	})
+
+	t.Run("seek from start", func(t *testing.T) {
+		c := New(Options{CacheSize: 15, ChunkSize: 3, maxSegmentCount: 1})
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		r.Read(make([]byte, 10))
+
+		if offset, err := r.Seek(1, io.SeekStart); err != nil || offset != 1 {
+			t.Error("seek failed", offset, err)
+			return
+		}
+
+		p := make([]byte, 3)
+		if n, err := r.Read(p); err != nil || n != 3 || !bytes.Equal(p, []byte{2, 3, 4}) {
+			t.Error("read failed", n, err, p)
+		}
+	})
+
+	t.Run("seek from current", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3, 4, 5, 6}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		r.Read(make([]byte, 2))
+
+		if offset, err := r.Seek(2, io.SeekCurrent); err != nil || offset != 4 {
+			t.Error("seek failed", offset, err)
+			return
+		}
+
+		p := make([]byte, 3)
+		if n, err := r.Read(p); err != io.EOF || n != 2 || !bytes.Equal(p[:n], []byte{5, 6}) {
+			t.Error("read failed", n, err, p)
+		}
+	})
+
+	t.Run("seek from end", func(t *testing.T) {
+		c := New(Options{CacheSize: 18, ChunkSize: 3, maxSegmentCount: 1})
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte("123456789012435"), time.Hour)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		if offset, err := r.Seek(4, io.SeekEnd); err != nil || offset != 11 {
+			t.Error("seek failed", offset, err)
+			return
+		}
+
+		p := make([]byte, 3)
+		if n, err := r.Read(p); err != nil || n != 3 || string(p) != "243" {
+			t.Error("read failed", n, err, string(p))
+		}
+	})
+
+	t.Run("seek from end when write incomplete", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", time.Hour)
+		defer w.Close()
+
+		w.Write([]byte{1, 2, 3})
+
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		if _, err := r.Seek(2, io.SeekEnd); err != ErrInvalidSeekOffset {
+			t.Error("seek failed to fail", err)
+			return
+		}
+	})
+
+	t.Run("seek before 0", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		r.Read(make([]byte, 1))
+		defer r.Close()
+
+		if _, err := r.Seek(-2, io.SeekCurrent); err != ErrInvalidSeekOffset {
+			t.Error("seek failed to fail", err)
+			return
+		}
+	})
+
+	t.Run("seek beyond end", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		r.Read(make([]byte, 2))
+		defer r.Close()
+
+		if _, err := r.Seek(2, io.SeekCurrent); err != ErrInvalidSeekOffset {
+			t.Error("seek failed to fail", err)
+			return
+		}
+	})
+
+	t.Run("seek beyond end when write incomplete", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip()
+		}
+
+		c := newTestCache()
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", time.Hour)
+		defer w.Close()
+
+		w.Write([]byte{1, 2, 3})
+
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		done := make(chan struct{})
+		go func() {
+			if _, err := r.Seek(5, io.SeekStart); err != nil {
+				t.Error("failed to seek", err)
+			}
+
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			t.Error("failed to block seek")
+		case <-time.After(3 * time.Millisecond):
+		}
+
+		w.Write([]byte{4, 5, 6})
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Millisecond):
+			t.Error("seek timeout")
+		}
+
+		p := make([]byte, 3)
+		if n, err := r.Read(p); err != nil || n != 1 || p[0] != 6 {
+			t.Error("failed to read", err, n, p[:n])
 		}
 	})
 }

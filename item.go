@@ -10,7 +10,7 @@ type item struct {
 	keyspace                 string
 	keySize, size            int
 	firstChunk, lastChunk    node
-	chunkPosition            int
+	chunkOffset              int
 	expires                  time.Time
 	readers                  int
 	writeComplete, discarded bool
@@ -51,7 +51,7 @@ func (i *item) appendChunk(s *chunk) {
 	}
 
 	i.lastChunk = s
-	i.chunkPosition = 0
+	i.chunkOffset = 0
 }
 
 // checks if a key equals with the item's key. Keys are stored in the underlying chunks, if a key spans
@@ -84,9 +84,9 @@ func (i *item) write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	n := i.lastChunk.(*chunk).write(i.chunkPosition, p)
+	n := i.lastChunk.(*chunk).write(i.chunkOffset, p)
 	i.size += n
-	i.chunkPosition += n
+	i.chunkOffset += n
 
 	return n, nil
 }

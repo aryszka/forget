@@ -1,4 +1,4 @@
-package forget
+package forget_test
 
 import (
 	"bytes"
@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"sync"
 	"time"
+
+	"github.com/aryszka/forget"
 )
 
 func Example_cachefill() {
@@ -31,12 +33,26 @@ func Example_cachefill() {
 	defer backend.Close()
 
 	// create a caching proxy
-	c := New(Options{CacheSize: 1 << 20, ChunkSize: 1 << 10})
+	c := forget.New(forget.Options{CacheSize: 1 << 20, ChunkSize: 1 << 10})
 	cacheServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// check if it is a hit
 		if r, ok := c.Get("default", r.URL.Path); ok {
 			fmt.Println("hit")
 			defer r.Close()
+
+			// make a preread to know that the backend responded with success
+			// during cache filling
+			b := make([]byte, 1<<10)
+			n, err := r.Read(b)
+			if err != nil && err != io.EOF {
+				fmt.Println("cache fill failed", err)
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+
+			w.Write(b[:n])
+
+			// copy the rest of the cached content to the response
 			io.Copy(w, r)
 			return
 		}
@@ -65,7 +81,7 @@ func Example_cachefill() {
 			return
 		}
 
-		// cache only the responses with status 200
+		// for this example, cache only the responses with status 200
 		var body io.Reader = rsp.Body
 		if rsp.StatusCode == http.StatusOK {
 			body = io.TeeReader(body, cacheItem)

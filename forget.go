@@ -127,7 +127,7 @@ func (c *Cache) copy(to io.Writer, from io.Reader) (int64, error) {
 // returned. The reader returns ErrCacheClosed if the cache was closed and ErrItemDiscarded if the original item
 // with the given keyspace and key is not available anymore. The reader must be closed after the read was
 // finished.
-func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
+func (c *Cache) Get(keyspace, key string) (*Reader, bool) {
 	h := c.hash(key)
 	ci := c.getSegment(h)
 	return ci.get(h, keyspace, key)
@@ -166,7 +166,7 @@ func (c *Cache) GetBytes(keyspace, key string) ([]byte, bool) {
 // returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item reaches the
 // maximum item size of the cache. The writer must be closed to indicate that no more data will be written to
 // the item.
-func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bool) {
+func (c *Cache) Set(keyspace, key string, ttl time.Duration) (*Writer, bool) {
 	if len(key) > c.maxItemSize {
 		return nil, false
 	}
@@ -272,9 +272,8 @@ func (s *Space) Delete(key string) {
 // Close shuts down the cache and releases resource.
 func (s *Space) Close() { s.cache.Close() }
 
-// do segment stats need to be public?
-// collisions to a list
-// implement seeking
+// the key collision number doesn't say much due to the keyspaces stored in the same bucket
+// turn single space the default, in http use X-Cache-Keyspace for keyspaces
 // docs
 // - document write cancellable with delete for cancelling cache filling
 // tests:
@@ -285,6 +284,6 @@ func (s *Space) Close() { s.cache.Close() }
 // - scenario testing
 // - why the drop at 100k items
 // - check stats, utilization
-// refactor cond mutexes
+// refactor cond mutexes?
 // expvar package
 // http package

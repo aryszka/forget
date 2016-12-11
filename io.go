@@ -10,13 +10,15 @@ type cacheIO struct {
 	item    *item
 }
 
-type reader struct {
+// Reader objects are used to read data from a cache item.
+type Reader struct {
 	*cacheIO
-	currentChunk  node
-	chunkPosition int
+	currentChunk            node
+	chunkIndex, chunkOffset int
 }
 
-type writer struct {
+// Writer objects are used to fill cache items.
+type Writer struct {
 	*cacheIO
 	max, size int
 }
@@ -34,21 +36,31 @@ var (
 
 	// ErrWriterClosed is returned when writing to or closing a writer that was already closed before.
 	ErrWriterClosed = errors.New("writer closed")
+
+	// ErrInvalidSeekOffset is returned by Seek() when trying to seek to an invalid position.
+	ErrInvalidSeekOffset = errors.New("invalid seek offset")
+
+	errWaitingForWrite = errors.New("waiting for write")
 )
 
-func newReader(s *segment, i *item) *reader {
-	return &reader{
-		cacheIO:       &cacheIO{segment: s, item: i},
-		currentChunk:  i.firstChunk,
-		chunkPosition: i.keySize,
-	}
+func (c *cacheIO) offsetToChunks(offset int) (int, int) {
+	chunkIndex := offset / c.segment.memory.chunkSize
+	chunkOffset := offset % c.segment.memory.chunkSize
+	return chunkIndex, chunkOffset
+}
+
+func newReader(s *segment, i *item) *Reader {
+	r := &Reader{cacheIO: &cacheIO{segment: s, item: i}}
+	chunkIndex, chunkOffset := r.offsetToChunks(i.keySize)
+	r.seekChunks(i.firstChunk, 0, chunkIndex, chunkOffset)
+	return r
 }
 
 // reads from the item's current underlying chunk once at the current chunk position. If reached the end of
 // the chunk, it steps first to the next chunk and resets the chunk position. If reached end of the item
 // and the write to the item is complete, returns EOF, if reached the end but the item is still being written,
 // returns nil
-func (r *reader) readOne(p []byte) (int, error) {
+func (r *Reader) readOne(p []byte) (int, error) {
 	r.segment.mx.RLock()
 	defer r.segment.mx.RUnlock()
 
@@ -60,17 +72,14 @@ func (r *reader) readOne(p []byte) (int, error) {
 		return 0, ErrItemDiscarded
 	}
 
-	if r.currentChunk != r.item.lastChunk &&
-		r.chunkPosition == r.segment.memory.chunkSize {
-
+	if r.currentChunk != r.item.lastChunk && r.chunkOffset == r.segment.memory.chunkSize {
 		r.currentChunk = r.currentChunk.next()
-		r.chunkPosition = 0
+		r.chunkIndex++
+		r.chunkOffset = 0
 	}
 
-	if r.currentChunk == r.item.lastChunk &&
-		r.chunkPosition+len(p) > r.item.chunkPosition {
-
-		p = p[:r.item.chunkPosition-r.chunkPosition]
+	if r.currentChunk == r.item.lastChunk && r.chunkOffset+len(p) > r.item.chunkOffset {
+		p = p[:r.item.chunkOffset-r.chunkOffset]
 		if len(p) == 0 {
 			if r.item.writeComplete {
 				return 0, io.EOF
@@ -80,14 +89,14 @@ func (r *reader) readOne(p []byte) (int, error) {
 		}
 	}
 
-	n := r.currentChunk.(*chunk).read(r.chunkPosition, p)
-	r.chunkPosition += n
+	n := r.currentChunk.(*chunk).read(r.chunkOffset, p)
+	r.chunkOffset += n
 	return n, nil
 }
 
-// reads from an item at the current position. If 0 bytes were read and the item is still being written, it
+// Read reads from an item at the current position. If 0 bytes were read and the item is still being written, it
 // blocks.
-func (r *reader) Read(p []byte) (int, error) {
+func (r *Reader) Read(p []byte) (int, error) {
 	var count int
 	for len(p) > 0 {
 		n, err := r.readOne(p)
@@ -100,7 +109,8 @@ func (r *reader) Read(p []byte) (int, error) {
 
 		if n == 0 {
 			// only block if there was nothing to read and no error.
-			// here waiting only for a change, condition checking happens during the actual read
+			// here waiting only for a change, while the
+			// condition checking happens during the actual read
 			r.item.writeCond.L.Lock()
 			r.item.writeCond.Wait()
 			r.item.writeCond.L.Unlock()
@@ -110,8 +120,106 @@ func (r *reader) Read(p []byte) (int, error) {
 	return count, nil
 }
 
-// closes the reader and signals read done.
-func (r *reader) Close() error {
+func (r *Reader) currentOffset() int64 {
+	return int64(r.chunkIndex*r.segment.memory.chunkSize + r.chunkOffset - r.item.keySize)
+}
+
+func (r *Reader) seekChunks(from node, fromIndex, chunkIndex, chunkOffset int) {
+	for fromIndex != chunkIndex {
+		if fromIndex < chunkIndex {
+			fromIndex++
+			from = from.next()
+		} else {
+			fromIndex--
+			from = from.prev()
+		}
+	}
+
+	r.currentChunk = from
+	r.chunkIndex = chunkIndex
+	r.chunkOffset = chunkOffset
+}
+
+func (r *Reader) seekOne(offset int64, whence int) (int64, error) {
+	r.segment.mx.RLock()
+	defer r.segment.mx.RUnlock()
+
+	to := int(offset)
+
+	switch whence {
+	case io.SeekCurrent:
+		to += r.chunkIndex*r.segment.memory.chunkSize + r.chunkOffset
+	case io.SeekEnd:
+		if !r.item.writeComplete {
+			return r.currentOffset(), ErrInvalidSeekOffset
+		}
+
+		to = r.item.size - to
+	default:
+		to += r.item.keySize
+	}
+
+	if to < r.item.keySize {
+		return r.currentOffset(), ErrInvalidSeekOffset
+	}
+
+	lastChunkIndex, lastOffset := r.offsetToChunks(r.item.size)
+	if lastOffset == 0 {
+		lastChunkIndex--
+	}
+
+	if to > r.item.size {
+		r.seekChunks(r.item.lastChunk, lastChunkIndex, lastChunkIndex, lastOffset)
+		if r.item.writeComplete {
+			return r.currentOffset(), ErrInvalidSeekOffset
+		}
+
+		return r.currentOffset(), errWaitingForWrite
+	}
+
+	chunkIndex, chunkOffset := r.offsetToChunks(to)
+	var (
+		from      node
+		fromIndex int
+	)
+
+	switch {
+	case r.chunkIndex/2 > chunkIndex:
+		from, fromIndex = r.item.firstChunk, 0
+	case r.item.writeComplete && (r.chunkIndex+lastChunkIndex)/2 < chunkIndex:
+		from, fromIndex = r.item.lastChunk, lastChunkIndex
+	default:
+		from, fromIndex = r.currentChunk, r.chunkIndex
+	}
+
+	r.seekChunks(from, fromIndex, chunkIndex, chunkOffset)
+	return r.currentOffset(), nil
+}
+
+// Seek moves the current position of the reader by offset counted from whence, which can be io.SeekStart,
+// io.SeekCurrent or io.SeekEnd. When the write to the item is incomplete, it is an error to use io.SeekEnd.
+// When the targeted position is beyond the current size of the item, and the write is incomplete, Seek blocks,
+// while if the write is complete, it returns an error.
+func (r *Reader) Seek(offset int64, whence int) (int64, error) {
+	for {
+		offset, err := r.seekOne(offset, whence)
+		if err == errWaitingForWrite {
+			// only block if waiting for new data.
+			// here waiting only for a change, while the
+			// condition checking happens during the actual seek
+			r.item.writeCond.L.Lock()
+			r.item.writeCond.Wait()
+			r.item.writeCond.L.Unlock()
+			continue
+		}
+
+		return offset, err
+	}
+}
+
+// Close releases the reader. When there items marked internally for delete and no more readers are attached to
+// them, those items will be deleted at the time of the next cache eviction of the same segment.
+func (r *Reader) Close() error {
 	defer r.segment.readDoneCond.Broadcast()
 
 	r.segment.mx.Lock()
@@ -130,8 +238,8 @@ func (r *reader) Close() error {
 	return nil
 }
 
-func newWriter(s *segment, i *item) *writer {
-	return &writer{
+func newWriter(s *segment, i *item) *Writer {
+	return &Writer{
 		cacheIO: &cacheIO{segment: s, item: i},
 		max:     s.memory.chunkCount*s.memory.chunkSize - i.keySize,
 	}
@@ -140,7 +248,7 @@ func newWriter(s *segment, i *item) *writer {
 // writes to an item. If the writer was closed or the max item size was reached, returns an error. If the last
 // chunk of the item is full, tries to allocate a new chunk. If allocation fails due to too many active
 // readers, the write blocks until allocation becomes possible.
-func (w *writer) Write(p []byte) (int, error) {
+func (w *Writer) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -190,7 +298,8 @@ func (w *writer) Write(p []byte) (int, error) {
 		if err == errAllocationFailed {
 			blocked = true
 
-			// here waiting only for a change, condition checking happens during the actual write
+			// here waiting only for a change, while the
+			// condition checking happens during the actual write
 			w.segment.readDoneCond.L.Lock()
 			w.segment.readDoneCond.Wait()
 			w.segment.readDoneCond.L.Unlock()
@@ -202,8 +311,9 @@ func (w *writer) Write(p []byte) (int, error) {
 	return count, nil
 }
 
-// closes the writer and signals write complete
-func (w *writer) Close() error {
+// Close releases the writer signalling write done internally. Readers, that attached to the same cache
+// item and blocked by trying to read beyond the available item size, return at this point.
+func (w *Writer) Close() error {
 	defer w.item.writeCond.Broadcast()
 
 	w.segment.mx.Lock()
