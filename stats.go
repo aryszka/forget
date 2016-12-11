@@ -108,7 +108,7 @@ type CacheStats struct {
 	// Total contains statistics the cache.
 	Total *Stats
 
-	// AvailableMemory tells how many memory is avalable in the cache for new items or further writing.
+	// AvailableMemory tells how many memory is available in the cache for new items or further writing.
 	AvailableMemory int
 
 	// Keyspaces contain statistics split by keyspaces in the cache.

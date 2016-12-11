@@ -42,5 +42,8 @@ vet:
 
 lint:
 	golint -set_exit_status -min_confidence 0.9
+	gocyclo -over 15 .
+	ineffassign .
+	misspell -error README.md Makefile *.go
 
 precommit: fmt cover vet lint
