@@ -192,8 +192,8 @@ func (c *CacheSpaces) copy(to io.Writer, from io.Reader) (int64, error) {
 // Get is like Cache.Get but with keyspaces.
 func (c *CacheSpaces) Get(keyspace, key string) (*Reader, bool) {
 	h := c.hash(key)
-	ci := c.getSegment(h)
-	return ci.get(h, keyspace, key)
+	s := c.getSegment(h)
+	return s.get(h, keyspace, key)
 }
 
 // GetKey is like Cache.GetKey but with keyspaces.
@@ -227,8 +227,8 @@ func (c *CacheSpaces) Set(keyspace, key string, ttl time.Duration) (*Writer, boo
 	}
 
 	h := c.hash(key)
-	ci := c.getSegment(h)
-	return ci.set(h, keyspace, key, ttl)
+	s := c.getSegment(h)
+	return s.set(h, keyspace, key, ttl)
 }
 
 // SetKey is like Cache.SetKey but with keyspaces.
@@ -258,15 +258,15 @@ func (c *CacheSpaces) SetBytes(keyspace, key string, data []byte, ttl time.Durat
 // Delete is like Cache.Delete but with keyspaces.
 func (c *CacheSpaces) Delete(keyspace, key string) {
 	h := c.hash(key)
-	ci := c.getSegment(h)
-	ci.del(h, keyspace, key)
+	s := c.getSegment(h)
+	s.del(h, keyspace, key)
 }
 
 // Stats returns approximate statistics about the cache state.
 func (c *CacheSpaces) Stats() *CacheStats {
 	s := make([]*segmentStats, 0, len(c.segments))
-	for _, ci := range c.segments {
-		s = append(s, ci.getStats())
+	for _, si := range c.segments {
+		s = append(s, si.getStats())
 	}
 
 	return newCacheStats(s)
@@ -274,8 +274,8 @@ func (c *CacheSpaces) Stats() *CacheStats {
 
 // Close shuts down the cache and releases resources.
 func (c *CacheSpaces) Close() {
-	for _, ci := range c.segments {
-		ci.close()
+	for _, s := range c.segments {
+		s.close()
 	}
 }
 
