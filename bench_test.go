@@ -11,9 +11,8 @@ import (
 )
 
 const (
-	emulateMultiCoreMode = 4
-	cacheSize            = 1 << 30
-	chunkSize            = 1 << 10
+	cacheSize = 1 << 30
+	chunkSize = 1 << 10
 )
 
 type cacheIFace interface {
@@ -46,7 +45,7 @@ func (b *buffer) Read(p []byte) (int, error)  { return b.buf.Read(p) }
 func (b *buffer) Write(p []byte) (int, error) { return b.buf.Write(p) }
 func (b *buffer) Close() error                { return nil }
 
-func newBaselineMap(o Options) cacheIFace {
+func newBaselineMap(Options) cacheIFace {
 	return make(baselineMap)
 }
 

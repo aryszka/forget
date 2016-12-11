@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,7 +14,82 @@ import (
 	"github.com/aryszka/forget"
 )
 
-func Example_cachefill() {
+func Example() {
+	// intialize a cache with 1MB cache size and 1KB chunk size
+	c := forget.New(forget.Options{CacheSize: 1 << 20, ChunkSize: 1 << 10})
+	defer c.Close()
+
+	// store a cache item
+	if !c.SetBytes("foo", []byte("bar"), time.Minute) {
+		log.Println("failed to set cache item")
+		return
+	}
+
+	// retrieve a cache item
+	b, ok := c.GetBytes("foo")
+	if !ok {
+		log.Println("failed to get cache item")
+		return
+	}
+
+	fmt.Printf("Item from the cache: %s.\n", string(b))
+
+	// Output:
+	// Item from the cache: bar.
+}
+
+func Example_io() {
+	c := forget.New(forget.Options{CacheSize: 1 << 20, ChunkSize: 1 << 10})
+	defer c.Close()
+
+	// set an item and receive a writer
+	w, ok := c.Set("foo", time.Minute)
+	if !ok {
+		log.Println("failed to set cache item")
+		return
+	}
+
+	// get three readers before the item data has been written
+	var r []io.Reader
+	for i := 0; i < 3; i++ {
+		ri, ok := c.Get("foo")
+		if !ok {
+			log.Println("failed to get cache item")
+			return
+		}
+
+		defer ri.Close()
+		r = append(r, ri)
+	}
+
+	// start filling the cache item in the background
+	go func() {
+		if _, err := w.Write([]byte("foobarbaz")); err != nil {
+			log.Println("failed to write item")
+		}
+
+		// closing the writer indicates that the item is filled
+		w.Close()
+	}()
+
+	// read from the readers, not necessarily after the cache item was filled:
+	for _, ri := range r {
+		p, err := ioutil.ReadAll(ri)
+		if err != nil {
+			log.Println("failed to read item")
+			return
+		}
+
+		fmt.Println(string(p))
+	}
+
+	// Output:
+	// foobarbaz
+	// foobarbaz
+	// foobarbaz
+}
+
+func Example_proxyfill() {
 	// The following example shows a backend server and a caching proxy in front of it. The backend produces
 	// an expensive resource. The proxy caches it, it prevents multiple requests reaching the backend in
 	// case of a cache miss, and serves any data to multiple clients in parallel as soon as it is available.
