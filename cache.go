@@ -59,6 +59,9 @@ func (c *cache) lookup(hash uint64, keyspace, key string) (*item, bool) {
 func (c *cache) addLookup(hash uint64, i *item) {
 	index := c.bucketIndex(hash)
 	c.itemLookup[index] = append(c.itemLookup[index], i)
+	if len(c.itemLookup) > 1 {
+		c.stats.incKeyCollisions(i.keyspace)
+	}
 }
 
 func (c *cache) deleteLookup(i *item) {
@@ -69,6 +72,10 @@ func (c *cache) deleteLookup(i *item) {
 			last := len(bucket) - 1
 			bucket[last], bucket[bii], bucket = nil, bucket[last], bucket[:last]
 			c.itemLookup[bi] = bucket
+			if len(c.itemLookup) > 0 {
+				c.stats.decKeyCollisions(i.keyspace)
+			}
+
 			return
 		}
 	}
@@ -264,8 +271,7 @@ func (c *cache) allocateFor(i *item) error {
 // moves an item in its keyspace's LRU list to the end, meaning that it was the most recently used item in the
 // keyspace
 func (c *cache) touchItem(i *item) {
-	c.lruLookup[i.keyspace].remove(i)
-	c.lruLookup[i.keyspace].insert(i, nil)
+	c.lruLookup[i.keyspace].move(i, nil)
 }
 
 // tries to find an item based on its hash, key and keyspace. If found but expired, deletes it. When finds a

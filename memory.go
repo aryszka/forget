@@ -73,14 +73,12 @@ func (m *memory) allocate() (*chunk, bool) {
 
 // moves a chunk to new position
 func (m *memory) move(s *chunk, before node) {
-	m.chunks.remove(s)
-	m.chunks.insert(s, before)
+	m.chunks.move(s, before)
 }
 
 // moves a range of chunks before the free chunk marker and sets the free chunk marker to the beginning of
 // the range
 func (m *memory) free(from, to *chunk) {
-	m.chunks.removeRange(from, to)
-	m.chunks.insertRange(from, to, m.firstFree)
+	m.chunks.moveRange(from, to, m.firstFree)
 	m.firstFree = from
 }

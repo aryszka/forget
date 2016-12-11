@@ -92,6 +92,9 @@ type Stats struct {
 	// WritersBlocked indicates how many writers were created whose write is blocked due to active readers
 	// preventing eviction.
 	WritersBlocked int
+
+	// KeyCollisions indicates the total number of colliding keys in the hash buckets.
+	KeyCollisions int
 }
 
 // SegmentStats objects contain statistics about an internal cache segment.
@@ -193,6 +196,7 @@ func (s *Stats) add(d *Stats) {
 	s.MarkedDeleted += d.MarkedDeleted
 	s.Writers += d.Writers
 	s.WritersBlocked += d.WritersBlocked
+	s.KeyCollisions += d.KeyCollisions
 }
 
 func newSegmentStats(chunkSize, availableMemory int, n *notify) *SegmentStats {
@@ -344,6 +348,13 @@ func (s *SegmentStats) blockedWritersChange(keyspace string, d int) {
 	}
 }
 
+func (s *SegmentStats) keyCollisionsChange(keyspace string, d int) {
+	s.Total.KeyCollisions += d
+	if ks, ok := s.Keyspaces[keyspace]; ok {
+		ks.KeyCollisions += d
+	}
+}
+
 func (s *SegmentStats) incReaders(keyspace string)        { s.readersChange(keyspace, 1) }
 func (s *SegmentStats) decReaders(keyspace string)        { s.readersChange(keyspace, -1) }
 func (s *SegmentStats) incMarkedDeleted(keyspace string)  { s.readersOnDeletedChange(keyspace, 1) }
@@ -352,6 +363,8 @@ func (s *SegmentStats) incWriters(keyspace string)        { s.writersChange(keys
 func (s *SegmentStats) decWriters(keyspace string)        { s.writersChange(keyspace, -1) }
 func (s *SegmentStats) incWritersBlocked(keyspace string) { s.blockedWritersChange(keyspace, 1) }
 func (s *SegmentStats) decWritersBlocked(keyspace string) { s.blockedWritersChange(keyspace, -1) }
+func (s *SegmentStats) incKeyCollisions(keyspace string)  { s.keyCollisionsChange(keyspace, 1) }
+func (s *SegmentStats) decKeyCollisions(keyspace string)  { s.keyCollisionsChange(keyspace, -1) }
 
 func (s *SegmentStats) clone() *SegmentStats {
 	sc := &SegmentStats{

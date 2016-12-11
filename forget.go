@@ -272,7 +272,6 @@ func (s *Space) Delete(key string) {
 // Close shuts down the cache and releases resource.
 func (s *Space) Close() { s.cache.Close() }
 
-// collision stats
 // move implemented in the list
 // do segment stats need to be public?
 // collisions to a list

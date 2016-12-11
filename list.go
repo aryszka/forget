@@ -74,6 +74,16 @@ func (l *list) removeRange(first, last node) {
 	}
 }
 
+func (l *list) moveRange(first, last, before node) {
+	l.removeRange(first, last)
+	l.insertRange(first, last, before)
+}
+
+func (l *list) insert(n, before node) { l.insertRange(n, n, before) }
+func (l *list) remove(n node)         { l.removeRange(n, n) }
+func (l *list) move(n, before node)   { l.moveRange(n, n, before) }
+func (l *list) empty() bool           { return l.first == nil }
+
 // removes the range from the list that is before the argument node, and inserts it at the end of the remaining
 // list
 func (l *list) rotate(at node) {
@@ -85,7 +95,3 @@ func (l *list) rotate(at node) {
 	l.removeRange(from, at)
 	l.insertRange(from, at, nil)
 }
-
-func (l *list) insert(n, before node) { l.insertRange(n, n, before) }
-func (l *list) remove(n node)         { l.removeRange(n, n) }
-func (l *list) empty() bool           { return l.first == nil }
