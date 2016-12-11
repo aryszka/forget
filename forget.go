@@ -13,18 +13,18 @@ const (
 	// DefaultCacheSize is used when CacheSize is not specified in the initial Options.
 	DefaultCacheSize = 1 << 30
 
-	// DefaultSegmentSize is used when SegmentSize is not specified in the initial Options.
-	DefaultSegmentSize = 1 << 15
+	// DefaultChunkSize is used when ChunkSize is not specified in the initial Options.
+	DefaultChunkSize = 1 << 15
 )
 
-// Options objects are used to pass in parameters to new Cache instances.
+// Options objects are used to pass in parameters to new Cache segments.
 type Options struct {
 
 	// CacheSize defines the size of the cache.
 	CacheSize int
 
-	// SegmentSize defines the segment size in the memory.
-	SegmentSize int
+	// ChunkSize defines the chunk size in the memory.
+	ChunkSize int
 
 	// Notify is used by the cache to send notifications about internal events. When nil, no notifications are
 	// sent. It is recommended to use a channel with a small buffer, e.g. 2.
@@ -34,8 +34,8 @@ type Options struct {
 	// meaning that evictions and allocation failures will trigger a notification.
 	NotifyMask EventType
 
-	hashing          func() hash.Hash64
-	maxInstanceCount int
+	hashing         func() hash.Hash64
+	maxSegmentCount int
 }
 
 // Cache provides an in-memory cache for arbitrary binary data identified by keyspaces and keys. All methods of
@@ -46,23 +46,23 @@ type Cache struct {
 	cache       []*cache
 }
 
-// SingleSpace is equivalent to Cache but it doesn't use keyspaces.
-type SingleSpace struct {
+// Space is equivalent to Cache but it uses only a single keyspace.
+type Space struct {
 	cache *Cache
 }
 
 // New initializes a cache.
 //
-// Forget creates internally multiple independent cache instances, as many as the maximum of the reported CPU
-// cores or the GOMAXPROCS value. These instances can be accessed in parallel without synchronization. This
+// Forget creates internally multiple independent cache segments, as many as the maximum of the reported CPU
+// cores or the GOMAXPROCS value. These segments can be accessed in parallel without synchronization. This
 // internal split of the cache affects the maximum size of a single item: ~ CacheSize / NumCPU.
 func New(o Options) *Cache {
 	if o.CacheSize <= 0 {
 		o.CacheSize = DefaultCacheSize
 	}
 
-	if o.SegmentSize <= 0 {
-		o.SegmentSize = DefaultSegmentSize
+	if o.ChunkSize <= 0 {
+		o.ChunkSize = DefaultChunkSize
 	}
 
 	if o.Notify == nil {
@@ -75,32 +75,32 @@ func New(o Options) *Cache {
 		o.hashing = fnv.New64a
 	}
 
-	instanceCount := o.maxInstanceCount
-	if instanceCount <= 0 {
-		instanceCount = runtime.NumCPU()
-		if instanceCount > runtime.GOMAXPROCS(-1) {
-			instanceCount = runtime.GOMAXPROCS(-1)
+	segmentCount := o.maxSegmentCount
+	if segmentCount <= 0 {
+		segmentCount = runtime.NumCPU()
+		if segmentCount > runtime.GOMAXPROCS(-1) {
+			segmentCount = runtime.GOMAXPROCS(-1)
 		}
 	}
 
-	instanceSize := o.CacheSize / instanceCount
-	instanceSize -= instanceSize % o.SegmentSize
-	segmentCount := instanceSize / o.SegmentSize
-	if segmentCount == 0 {
-		instanceCount = 1
-		segmentCount = o.CacheSize / o.SegmentSize
-		instanceSize = segmentCount * o.SegmentSize
+	segmentSize := o.CacheSize / segmentCount
+	segmentSize -= segmentSize % o.ChunkSize
+	chunkCount := segmentSize / o.ChunkSize
+	if chunkCount == 0 {
+		segmentCount = 1
+		chunkCount = o.CacheSize / o.ChunkSize
+		segmentSize = chunkCount * o.ChunkSize
 	}
 
 	n := newNotify(o.Notify, o.NotifyMask)
-	c := make([]*cache, instanceCount)
+	c := make([]*cache, segmentCount)
 	for i := range c {
-		c[i] = newCache(segmentCount, o.SegmentSize, n)
+		c[i] = newCache(chunkCount, o.ChunkSize, n)
 	}
 
 	return &Cache{
 		options:     o,
-		maxItemSize: instanceSize,
+		maxItemSize: segmentSize,
 		cache:       c,
 	}
 }
@@ -112,13 +112,13 @@ func (c *Cache) hash(key string) uint64 {
 }
 
 func (c *Cache) getCache(hash uint64) *cache {
-	// take the cache instance based on the middle of the key hash
+	// take the cache segment based on the middle of the key hash
 	return c.cache[int(hash>>32)%len(c.cache)]
 }
 
-// copies from a reader to a writer with a buffer of the same size as the used segments
+// copies from a reader to a writer with a buffer of the same size as the used chunks
 func (c *Cache) copy(to io.Writer, from io.Reader) (int64, error) {
-	return io.CopyBuffer(to, from, make([]byte, c.options.SegmentSize))
+	return io.CopyBuffer(to, from, make([]byte, c.options.ChunkSize))
 }
 
 // Get retrieves a reader to an item in the cache. The second return argument indicates if the item was found.
@@ -204,8 +204,8 @@ func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) b
 	return err == nil
 }
 
-// Del deletes an item from the cache with a keyspace and key.
-func (c *Cache) Del(keyspace, key string) {
+// Delete deletes an item from the cache with a keyspace and key.
+func (c *Cache) Delete(keyspace, key string) {
 	h := c.hash(key)
 	ci := c.getCache(h)
 	ci.del(h, keyspace, key)
@@ -213,7 +213,7 @@ func (c *Cache) Del(keyspace, key string) {
 
 // Stats returns approximate statistics about the cache state.
 func (c *Cache) Stats() *CacheStats {
-	s := make([]*InstanceStats, 0, len(c.cache))
+	s := make([]*SegmentStats, 0, len(c.cache))
 	for _, ci := range c.cache {
 		s = append(s, ci.getStats())
 	}
@@ -228,64 +228,61 @@ func (c *Cache) Close() {
 	}
 }
 
-// NewSingleSpace is like New() but initializes a cache that doesn't use
+// NewSpace is like New() but initializes a cache that doesn't use
 // keyspaces.
-func NewSingleSpace(o Options) *SingleSpace {
-	return &SingleSpace{cache: New(o)}
+func NewSpace(o Options) *Space {
+	return &Space{cache: New(o)}
 }
 
 // Get is like Cache.Get without keyspaces.
-func (s *SingleSpace) Get(key string) (io.ReadCloser, bool) {
+func (s *Space) Get(key string) (io.ReadCloser, bool) {
 	return s.cache.Get("", key)
 }
 
 // GetKey is like Cache.GetKey without keyspaces.
-func (s *SingleSpace) GetKey(key string) bool {
+func (s *Space) GetKey(key string) bool {
 	return s.cache.GetKey("", key)
 }
 
 // GetBytes is like Cache.GetBytes without keyspaces.
-func (s *SingleSpace) GetBytes(key string) ([]byte, bool) {
+func (s *Space) GetBytes(key string) ([]byte, bool) {
 	return s.cache.GetBytes("", key)
 }
 
 // Set is like Cache.Set without keyspaces.
-func (s *SingleSpace) Set(key string, ttl time.Duration) (io.WriteCloser, bool) {
+func (s *Space) Set(key string, ttl time.Duration) (io.WriteCloser, bool) {
 	return s.cache.Set("", key, ttl)
 }
 
 // SetKey is like Cache.SetKey without keyspaces.
-func (s *SingleSpace) SetKey(key string, ttl time.Duration) bool {
+func (s *Space) SetKey(key string, ttl time.Duration) bool {
 	return s.cache.SetKey("", key, ttl)
 }
 
 // SetBytes is like Cache.SetBytes without keyspaces.
-func (s *SingleSpace) SetBytes(key string, data []byte, ttl time.Duration) bool {
+func (s *Space) SetBytes(key string, data []byte, ttl time.Duration) bool {
 	return s.cache.SetBytes("", key, data, ttl)
 }
 
-// Del is like Cache.Del without keyspaces.
-func (s *SingleSpace) Del(key string) {
-	s.cache.Del("", key)
+// Delete is like Cache.Delete without keyspaces.
+func (s *Space) Delete(key string) {
+	s.cache.Delete("", key)
 }
 
 // Close shuts down the cache and releases resource.
-func (s *SingleSpace) Close() { s.cache.Close() }
+func (s *Space) Close() { s.cache.Close() }
 
-// dec readers on delete from reader close
-// rename SingleSpace to Space
 // collision stats
 // move implemented in the list
-// do instance stats need to be public?
-// find a better name for segment and instance
-// rename Del to Delete
+// do segment stats need to be public?
 // collisions to a list
+// implement seeking
 // docs
 // - document write cancellable with delete for cancelling cache filling
 // tests:
 // - tests based on the documentation
 // - tests based on the code
-// - more combined io tests (buffer sizes, segment borders, event orders)
+// - more combined io tests (buffer sizes, chunk borders, event orders)
 // - fuzzy testing
 // - scenario testing
 // - why the drop at 100k items

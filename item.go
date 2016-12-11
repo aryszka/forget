@@ -6,16 +6,16 @@ import (
 )
 
 type item struct {
-	hash                      uint64
-	keyspace                  string
-	keySize, size             int
-	firstSegment, lastSegment node
-	segmentPosition           int
-	expires                   time.Time
-	readers                   int
-	writeComplete, discarded  bool
-	writeCond                 *sync.Cond
-	prevItem, nextItem        node
+	hash                     uint64
+	keyspace                 string
+	keySize, size            int
+	firstChunk, lastChunk    node
+	chunkPosition            int
+	expires                  time.Time
+	readers                  int
+	writeComplete, discarded bool
+	writeCond                *sync.Cond
+	prevItem, nextItem       node
 }
 
 func newItem(hash uint64, keyspace string, keySize int, ttl time.Duration) *item {
@@ -37,33 +37,33 @@ func (i *item) expired() bool {
 	return i.expires.Before(time.Now())
 }
 
-func (i *item) data() (*segment, *segment) {
-	if i.firstSegment == nil {
+func (i *item) data() (*chunk, *chunk) {
+	if i.firstChunk == nil {
 		return nil, nil
 	}
 
-	return i.firstSegment.(*segment), i.lastSegment.(*segment)
+	return i.firstChunk.(*chunk), i.lastChunk.(*chunk)
 }
 
-func (i *item) appendSegment(s *segment) {
-	if i.firstSegment == nil {
-		i.firstSegment = s
+func (i *item) appendChunk(s *chunk) {
+	if i.firstChunk == nil {
+		i.firstChunk = s
 	}
 
-	i.lastSegment = s
-	i.segmentPosition = 0
+	i.lastChunk = s
+	i.chunkPosition = 0
 }
 
-// checks if a key equals with the item's key. Keys are stored in the underlying segments, if a key spans
-// multiple segments, keyEquals proceeds through the required number of segments.
+// checks if a key equals with the item's key. Keys are stored in the underlying chunks, if a key spans
+// multiple chunks, keyEquals proceeds through the required number of chunks.
 func (i *item) keyEquals(key string) bool {
 	if len(key) != i.keySize {
 		return false
 	}
 
-	p, s := []byte(key), i.firstSegment
+	p, s := []byte(key), i.firstChunk
 	for len(p) > 0 && s != nil {
-		ok, n := s.(*segment).bytesEqual(0, p)
+		ok, n := s.(*chunk).bytesEqual(0, p)
 		if !ok {
 			return false
 		}
@@ -74,28 +74,28 @@ func (i *item) keyEquals(key string) bool {
 	return len(p) == 0
 }
 
-// writes from the last used segment position of the last segment, maximum to the end of the segment.
+// writes from the last used chunk position of the last chunk, maximum to the end of the chunk.
 func (i *item) write(p []byte) (int, error) {
 	if i.discarded {
 		return 0, ErrItemDiscarded
 	}
 
-	if i.lastSegment == nil {
+	if i.lastChunk == nil {
 		return 0, nil
 	}
 
-	n := i.lastSegment.(*segment).write(i.segmentPosition, p)
+	n := i.lastChunk.(*chunk).write(i.chunkPosition, p)
 	i.size += n
-	i.segmentPosition += n
+	i.chunkPosition += n
 
 	return n, nil
 }
 
-// closes the item and releases the underlying segments
+// closes the item and releases the underlying chunks
 func (i *item) close() {
 	i.discarded = true
-	i.firstSegment = nil
-	i.lastSegment = nil
+	i.firstChunk = nil
+	i.lastChunk = nil
 	i.prevItem = nil
 	i.nextItem = nil
 }

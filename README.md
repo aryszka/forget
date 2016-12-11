@@ -19,7 +19,7 @@ It:
 - evicts first the items in the keyspace of the new item, fitting this way less frequently accessed but more
   expensive recources next to frequently accessed but cheaper ones, staying within a shared memory limit;
 - provides continuous usage statistics for monitoring health and performance;
-- supports to run any number of instances in a process with different configuration;
+- supports to run any number of segments in a process with different configuration;
 
 ### Documentation:
 
@@ -30,7 +30,7 @@ More details about the usage and the package description can be found here:
 ### Example:
 
 ```
-c := forget.New(forget.Options{MaxSize: 1 << 9, SegmentSize: 1 << 6})
+c := forget.New(forget.Options{MaxSize: 1 << 9, ChunkSize: 1 << 6})
 defer c.Close()
 
 c.SetBytes("pages", "/home", []byte("Hello, world!"), time.Minute)

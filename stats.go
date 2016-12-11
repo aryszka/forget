@@ -17,7 +17,7 @@ const (
 	// Set events are sent when a cache item was stored.
 	Set
 
-	// Delete events are sent when a cache item was deleted (explicitly calling Del() or overwritten by Set()).
+	// Delete events are sent when a cache item was deleted (explicitly calling Delete() or overwritten by Set()).
 	Delete
 
 	// WriteComplete events are sent when a cache item's write is finished.
@@ -57,7 +57,8 @@ type Event struct {
 	// EffectiveSizeChange contains the net size change caused by the event.
 	EffectiveSizeChange int
 
-	// UsedSizeChange contains the size change caused by the event, calculated based on the freed or allocated segments.
+	// UsedSizeChange contains the size change caused by the event, calculated based on the freed or
+	// allocated chunks.
 	UsedSizeChange int
 }
 
@@ -66,7 +67,7 @@ type notify struct {
 	listener chan<- *Event
 }
 
-// Stats objects contain cache statistics about keyspaces, internal cache instances or the complete cache.
+// Stats objects contain cache statistics about keyspaces, internal cache segments or the complete cache.
 type Stats struct {
 
 	// ItemCount indicates the number of stored items.
@@ -75,15 +76,15 @@ type Stats struct {
 	// EffectiveSize indicates the net size of the stored items.
 	EffectiveSize int
 
-	// UsedSize indicates the total size of the used segments.
+	// UsedSize indicates the total size of the used chunks.
 	UsedSize int
 
 	// Readers indicates how many readers were creaetd and not yet finished (closed).
 	Readers int
 
-	// ReadersOnDeleted indicates how many readers were created whose items were deleted since then but the
+	// MarkedDeleted indicates how many readers were created whose items were deleted since then but the
 	// readers are still not done.
-	ReadersOnDeleted int
+	MarkedDeleted int
 
 	// Writers indicates how many writers were created and not yet completed (closed).
 	Writers int
@@ -93,20 +94,20 @@ type Stats struct {
 	WritersBlocked int
 }
 
-// InstanceStats objects contain statistics about an internal cache instance.
-type InstanceStats struct {
+// SegmentStats objects contain statistics about an internal cache segment.
+type SegmentStats struct {
 
-	// Total contains the statistics about a cache instance.
+	// Total contains the statistics about a cache segment.
 	Total *Stats
 
-	// AvailableMemory tells how many memory is avalable in a cache instance for new items or further writing.
+	// AvailableMemory tells how many memory is avalable in a cache segment for new items or further writing.
 	AvailableMemory int
 
-	// Keyspaces contain statistics split by keyspaces in a cache instance.
+	// Keyspaces contain statistics split by keyspaces in a cache segment.
 	Keyspaces map[string]*Stats
 
-	segmentSize int
-	notify      *notify
+	chunkSize int
+	notify    *notify
 }
 
 // CacheStats objects contain statistics about the cache, including the internal cache instnaces and keyspaces.
@@ -121,8 +122,8 @@ type CacheStats struct {
 	// Keyspaces contain statistics split by keyspaces in the cache.
 	Keyspaces map[string]*Stats
 
-	// Instances contains statistics split by the internal cache instances.
-	Instances []*InstanceStats
+	// Segments contains statistics split by the internal cache segments.
+	Segments []*SegmentStats
 }
 
 // String returns the string representation of an EventType value, listing all the set flags.
@@ -189,34 +190,34 @@ func (s *Stats) add(d *Stats) {
 	s.EffectiveSize += d.EffectiveSize
 	s.UsedSize += d.UsedSize
 	s.Readers += d.Readers
-	s.ReadersOnDeleted += d.ReadersOnDeleted
+	s.MarkedDeleted += d.MarkedDeleted
 	s.Writers += d.Writers
 	s.WritersBlocked += d.WritersBlocked
 }
 
-func newInstanceStats(segmentSize, availableMemory int, n *notify) *InstanceStats {
-	return &InstanceStats{
+func newSegmentStats(chunkSize, availableMemory int, n *notify) *SegmentStats {
+	return &SegmentStats{
 		Total:           &Stats{},
 		AvailableMemory: availableMemory,
 		Keyspaces:       make(map[string]*Stats),
-		segmentSize:     segmentSize,
+		chunkSize:       chunkSize,
 		notify:          n,
 	}
 }
 
-// calculates how much size a net size value takes in an item based on the segment size and the current segment
+// calculates how much size a net size value takes in an item based on the chunk size and the current chunk
 // offset
-func usedSize(size, offset, segmentSize int) int {
-	size += offset % segmentSize
-	usedSize := (size / segmentSize) * segmentSize
-	if size%segmentSize > 0 {
-		usedSize += segmentSize
+func usedSize(size, offset, chunkSize int) int {
+	size += offset % chunkSize
+	usedSize := (size / chunkSize) * chunkSize
+	if size%chunkSize > 0 {
+		usedSize += chunkSize
 	}
 
 	return usedSize
 }
 
-func (s *InstanceStats) notifyHit(keyspace, key string) {
+func (s *SegmentStats) notifyHit(keyspace, key string) {
 	s.notify.send(&Event{
 		Type:     Hit,
 		Keyspace: keyspace,
@@ -224,7 +225,7 @@ func (s *InstanceStats) notifyHit(keyspace, key string) {
 	})
 }
 
-func (s *InstanceStats) notifyMiss(keyspace, key string) {
+func (s *SegmentStats) notifyMiss(keyspace, key string) {
 	s.notify.send(&Event{
 		Type:     Miss,
 		Keyspace: keyspace,
@@ -232,52 +233,52 @@ func (s *InstanceStats) notifyMiss(keyspace, key string) {
 	})
 }
 
-func (s *InstanceStats) notifySet(keyspace, key string, keySize int) {
+func (s *SegmentStats) notifySet(keyspace, key string, keySize int) {
 	s.notify.send(&Event{
 		Type:                Set,
 		Keyspace:            keyspace,
 		Key:                 key,
 		EffectiveSizeChange: keySize,
-		UsedSizeChange:      usedSize(keySize, 0, s.segmentSize),
+		UsedSizeChange:      usedSize(keySize, 0, s.chunkSize),
 	})
 }
 
-func (s *InstanceStats) notifyWriteComplete(keyspace string, keySize, contentSize int) {
+func (s *SegmentStats) notifyWriteComplete(keyspace string, keySize, contentSize int) {
 	s.notify.send(&Event{
 		Type:                WriteComplete,
 		Keyspace:            keyspace,
 		EffectiveSizeChange: contentSize,
-		UsedSizeChange:      usedSize(contentSize, keySize, s.segmentSize),
+		UsedSizeChange:      usedSize(contentSize, keySize, s.chunkSize),
 	})
 }
 
-func (s *InstanceStats) notifyRemove(typ EventType, keyspace, key string, size int) {
+func (s *SegmentStats) notifyRemove(typ EventType, keyspace, key string, size int) {
 	s.notify.send(&Event{
 		Type:                typ,
 		Keyspace:            keyspace,
 		Key:                 key,
 		EffectiveSizeChange: -size,
-		UsedSizeChange:      -usedSize(size, 0, s.segmentSize),
+		UsedSizeChange:      -usedSize(size, 0, s.chunkSize),
 	})
 }
 
-func (s *InstanceStats) notifyDelete(keyspace, key string, size int) {
+func (s *SegmentStats) notifyDelete(keyspace, key string, size int) {
 	s.notifyRemove(Delete, keyspace, key, size)
 }
 
-func (s *InstanceStats) notifyExpire(keyspace, key string) {
+func (s *SegmentStats) notifyExpire(keyspace, key string) {
 	s.notifyRemove(Expire|Miss, keyspace, key, 0)
 }
 
-func (s *InstanceStats) notifyExpireDelete(keyspace, key string, size int) {
+func (s *SegmentStats) notifyExpireDelete(keyspace, key string, size int) {
 	s.notifyRemove(Expire|Delete|Miss, keyspace, key, size)
 }
 
-func (s *InstanceStats) notifyEvict(keyspace string, size int) {
+func (s *SegmentStats) notifyEvict(keyspace string, size int) {
 	s.notifyRemove(Evict|Delete, keyspace, "", size)
 }
 
-func (s *InstanceStats) notifyAllocFailed(keyspace string) {
+func (s *SegmentStats) notifyAllocFailed(keyspace string) {
 	s.notify.send(&Event{
 		Type:     AllocFailed,
 		Keyspace: keyspace,
@@ -285,9 +286,9 @@ func (s *InstanceStats) notifyAllocFailed(keyspace string) {
 }
 
 // tracks the changes of all the indicators caused by an added or removed item
-func (s *InstanceStats) itemChange(i *item, mod int) {
+func (s *SegmentStats) itemChange(i *item, mod int) {
 	size := i.size * mod
-	usedSize := usedSize(i.size, 0, s.segmentSize) * mod
+	usedSize := usedSize(i.size, 0, s.chunkSize) * mod
 
 	s.Total.ItemCount += mod
 	s.Total.EffectiveSize += size
@@ -300,7 +301,7 @@ func (s *InstanceStats) itemChange(i *item, mod int) {
 	ks.UsedSize += usedSize
 }
 
-func (s *InstanceStats) addItem(i *item) {
+func (s *SegmentStats) addItem(i *item) {
 	if _, ok := s.Keyspaces[i.keyspace]; !ok {
 		s.Keyspaces[i.keyspace] = &Stats{}
 	}
@@ -308,52 +309,52 @@ func (s *InstanceStats) addItem(i *item) {
 	s.itemChange(i, 1)
 }
 
-func (s *InstanceStats) deleteItem(i *item) {
+func (s *SegmentStats) deleteItem(i *item) {
 	s.itemChange(i, -1)
 	if s.Keyspaces[i.keyspace].ItemCount == 0 {
 		delete(s.Keyspaces, i.keyspace)
 	}
 }
 
-func (s *InstanceStats) readersChange(keyspace string, d int) {
+func (s *SegmentStats) readersChange(keyspace string, d int) {
 	s.Total.Readers += d
 	if ks, ok := s.Keyspaces[keyspace]; ok {
 		ks.Readers += d
 	}
 }
 
-func (s *InstanceStats) readersOnDeletedChange(keyspace string, d int) {
-	s.Total.ReadersOnDeleted += d
+func (s *SegmentStats) readersOnDeletedChange(keyspace string, d int) {
+	s.Total.MarkedDeleted += d
 	if ks, ok := s.Keyspaces[keyspace]; ok {
-		ks.ReadersOnDeleted += d
+		ks.MarkedDeleted += d
 	}
 }
 
-func (s *InstanceStats) writersChange(keyspace string, d int) {
+func (s *SegmentStats) writersChange(keyspace string, d int) {
 	s.Total.Writers += d
 	if ks, ok := s.Keyspaces[keyspace]; ok {
 		ks.Writers += d
 	}
 }
 
-func (s *InstanceStats) blockedWritersChange(keyspace string, d int) {
+func (s *SegmentStats) blockedWritersChange(keyspace string, d int) {
 	s.Total.WritersBlocked += d
 	if ks, ok := s.Keyspaces[keyspace]; ok {
 		ks.WritersBlocked += d
 	}
 }
 
-func (s *InstanceStats) incReaders(keyspace string)          { s.readersChange(keyspace, 1) }
-func (s *InstanceStats) decReaders(keyspace string)          { s.readersChange(keyspace, -1) }
-func (s *InstanceStats) incReadersOnDeleted(keyspace string) { s.readersOnDeletedChange(keyspace, 1) }
-func (s *InstanceStats) decReadersOnDeleted(keyspace string) { s.readersOnDeletedChange(keyspace, -1) }
-func (s *InstanceStats) incWriters(keyspace string)          { s.writersChange(keyspace, 1) }
-func (s *InstanceStats) decWriters(keyspace string)          { s.writersChange(keyspace, -1) }
-func (s *InstanceStats) incWritersBlocked(keyspace string)   { s.blockedWritersChange(keyspace, 1) }
-func (s *InstanceStats) decWritersBlocked(keyspace string)   { s.blockedWritersChange(keyspace, -1) }
+func (s *SegmentStats) incReaders(keyspace string)        { s.readersChange(keyspace, 1) }
+func (s *SegmentStats) decReaders(keyspace string)        { s.readersChange(keyspace, -1) }
+func (s *SegmentStats) incMarkedDeleted(keyspace string)  { s.readersOnDeletedChange(keyspace, 1) }
+func (s *SegmentStats) decMarkedDeleted(keyspace string)  { s.readersOnDeletedChange(keyspace, -1) }
+func (s *SegmentStats) incWriters(keyspace string)        { s.writersChange(keyspace, 1) }
+func (s *SegmentStats) decWriters(keyspace string)        { s.writersChange(keyspace, -1) }
+func (s *SegmentStats) incWritersBlocked(keyspace string) { s.blockedWritersChange(keyspace, 1) }
+func (s *SegmentStats) decWritersBlocked(keyspace string) { s.blockedWritersChange(keyspace, -1) }
 
-func (s *InstanceStats) clone() *InstanceStats {
-	sc := &InstanceStats{
+func (s *SegmentStats) clone() *SegmentStats {
+	sc := &SegmentStats{
 		AvailableMemory: s.AvailableMemory,
 		Keyspaces:       make(map[string]*Stats),
 	}
@@ -369,17 +370,17 @@ func (s *InstanceStats) clone() *InstanceStats {
 	return sc
 }
 
-func newCacheStats(i []*InstanceStats) *CacheStats {
+func newCacheStats(i []*SegmentStats) *CacheStats {
 	s := &CacheStats{
 		Total:     &Stats{},
 		Keyspaces: make(map[string]*Stats),
-		Instances: make([]*InstanceStats, 0, len(i)),
+		Segments:  make([]*SegmentStats, 0, len(i)),
 	}
 
 	for _, ii := range i {
 		s.Total.add(ii.Total)
 		s.AvailableMemory += ii.AvailableMemory
-		s.Instances = append(s.Instances, ii)
+		s.Segments = append(s.Segments, ii)
 
 		for k, ks := range ii.Keyspaces {
 			if _, ok := s.Keyspaces[k]; !ok {

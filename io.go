@@ -12,8 +12,8 @@ type cacheIO struct {
 
 type reader struct {
 	*cacheIO
-	currentSegment  node
-	segmentPosition int
+	currentChunk  node
+	chunkPosition int
 }
 
 type writer struct {
@@ -38,14 +38,14 @@ var (
 
 func newReader(c *cache, i *item) *reader {
 	return &reader{
-		cacheIO:         &cacheIO{cache: c, item: i},
-		currentSegment:  i.firstSegment,
-		segmentPosition: i.keySize,
+		cacheIO:       &cacheIO{cache: c, item: i},
+		currentChunk:  i.firstChunk,
+		chunkPosition: i.keySize,
 	}
 }
 
-// reads from the item's current underlying segment once at the current segment position. If reached the end of
-// the segment, it steps first to the next segment and resets the segment position. If reached end of the item
+// reads from the item's current underlying chunk once at the current chunk position. If reached the end of
+// the chunk, it steps first to the next chunk and resets the chunk position. If reached end of the item
 // and the write to the item is complete, returns EOF, if reached the end but the item is still being written,
 // returns nil
 func (r *reader) readOne(p []byte) (int, error) {
@@ -60,17 +60,17 @@ func (r *reader) readOne(p []byte) (int, error) {
 		return 0, ErrItemDiscarded
 	}
 
-	if r.currentSegment != r.item.lastSegment &&
-		r.segmentPosition == r.cache.memory.segmentSize {
+	if r.currentChunk != r.item.lastChunk &&
+		r.chunkPosition == r.cache.memory.chunkSize {
 
-		r.currentSegment = r.currentSegment.next()
-		r.segmentPosition = 0
+		r.currentChunk = r.currentChunk.next()
+		r.chunkPosition = 0
 	}
 
-	if r.currentSegment == r.item.lastSegment &&
-		r.segmentPosition+len(p) > r.item.segmentPosition {
+	if r.currentChunk == r.item.lastChunk &&
+		r.chunkPosition+len(p) > r.item.chunkPosition {
 
-		p = p[:r.item.segmentPosition-r.segmentPosition]
+		p = p[:r.item.chunkPosition-r.chunkPosition]
 		if len(p) == 0 {
 			if r.item.writeComplete {
 				return 0, io.EOF
@@ -80,8 +80,8 @@ func (r *reader) readOne(p []byte) (int, error) {
 		}
 	}
 
-	n := r.currentSegment.(*segment).read(r.segmentPosition, p)
-	r.segmentPosition += n
+	n := r.currentChunk.(*chunk).read(r.chunkPosition, p)
+	r.chunkPosition += n
 	return n, nil
 }
 
@@ -121,11 +121,11 @@ func (r *reader) Close() error {
 		return ErrReaderClosed
 	}
 
+	r.item.readers--
 	r.cache.stats.decReaders(r.item.keyspace)
 
-	r.item.readers--
 	r.item = nil
-	r.currentSegment = nil
+	r.currentChunk = nil
 
 	return nil
 }
@@ -133,12 +133,12 @@ func (r *reader) Close() error {
 func newWriter(c *cache, i *item) *writer {
 	return &writer{
 		cacheIO: &cacheIO{cache: c, item: i},
-		max:     c.memory.segmentCount*c.memory.segmentSize - i.keySize,
+		max:     c.memory.chunkCount*c.memory.chunkSize - i.keySize,
 	}
 }
 
 // writes to an item. If the writer was closed or the max item size was reached, returns an error. If the last
-// segment of the item is full, tries to allocate a new segment. If allocation fails due to too many active
+// chunk of the item is full, tries to allocate a new chunk. If allocation fails due to too many active
 // readers, the write blocks until allocation becomes possible.
 func (w *writer) Write(p []byte) (int, error) {
 	if len(p) == 0 {

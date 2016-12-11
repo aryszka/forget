@@ -16,7 +16,7 @@ type cache struct {
 	lruRotate    *list
 	itemLookup   [][]*item
 	closed       bool
-	stats        *InstanceStats
+	stats        *SegmentStats
 }
 
 var (
@@ -26,16 +26,16 @@ var (
 	ErrCacheClosed = errors.New("cache closed")
 )
 
-func newCache(segmentCount, segmentSize int, notify *notify) *cache {
+func newCache(chunkCount, chunkSize int, notify *notify) *cache {
 	return &cache{
 		mx:           &sync.RWMutex{},
 		readDoneCond: sync.NewCond(&sync.Mutex{}),
-		memory:       newMemory(segmentCount, segmentSize),
+		memory:       newMemory(chunkCount, chunkSize),
 		lruLookup:    make(map[string]*list),
 		lruRotate:    &list{},
 		deleteQueue:  &list{},
-		itemLookup:   make([][]*item, segmentCount), // there cannot be more entries than segments
-		stats:        newInstanceStats(segmentSize, segmentCount*segmentSize, notify),
+		itemLookup:   make([][]*item, chunkCount), // there cannot be more entries than chunks
+		stats:        newSegmentStats(chunkSize, chunkCount*chunkSize, notify),
 	}
 }
 
@@ -143,7 +143,7 @@ func (c *cache) evictFromDeleted() bool {
 		i.close()
 
 		c.stats.deleteItem(i)
-		c.stats.decReadersOnDeleted(i.keyspace)
+		c.stats.decMarkedDeleted(i.keyspace)
 		c.stats.notifyEvict(i.keyspace, i.size)
 
 		return true
@@ -239,8 +239,8 @@ func (c *cache) evictForItem(i *item) bool {
 	return c.evictFromOtherKeyspaces(i)
 }
 
-// tries to allocate a single segment in the free memory space. If it fails, tries to evict an item. When
-// allocated, aligns the segment with the item's existing segments.
+// tries to allocate a single chunk in the free memory space. If it fails, tries to evict an item. When
+// allocated, aligns the chunk with the item's existing chunks.
 func (c *cache) allocateFor(i *item) error {
 	s, ok := c.memory.allocate()
 	if !ok {
@@ -257,7 +257,7 @@ func (c *cache) allocateFor(i *item) error {
 		c.memory.move(s, last.next())
 	}
 
-	i.appendSegment(s)
+	i.appendChunk(s)
 	return nil
 }
 
@@ -291,7 +291,7 @@ func (c *cache) get(hash uint64, keyspace, key string) (io.ReadCloser, bool) {
 			return nil, false
 		}
 
-		c.stats.incReadersOnDeleted(i.keyspace)
+		c.stats.incMarkedDeleted(i.keyspace)
 		c.stats.notifyExpire(keyspace, key)
 		return nil, false
 	}
@@ -303,7 +303,7 @@ func (c *cache) get(hash uint64, keyspace, key string) (io.ReadCloser, bool) {
 	return newReader(c, i), true
 }
 
-// allocates 0 or more segments to fit the key with the item and saves the key bytes in memory
+// allocates 0 or more chunks to fit the key with the item and saves the key bytes in memory
 func (c *cache) writeKey(i *item, key string) error {
 	p := []byte(key)
 	for len(p) > 0 {
@@ -334,7 +334,7 @@ func (c *cache) trySet(hash uint64, keyspace, key string, ttl time.Duration) (io
 			c.stats.deleteItem(i)
 			c.stats.notifyDelete(keyspace, key, i.size)
 		} else {
-			c.stats.incReadersOnDeleted(i.keyspace)
+			c.stats.incMarkedDeleted(i.keyspace)
 			c.stats.notifyDelete(keyspace, key, 0)
 		}
 	}
@@ -399,11 +399,11 @@ func (c *cache) del(hash uint64, keyspace, key string) {
 		return
 	}
 
-	c.stats.incReadersOnDeleted(i.keyspace)
+	c.stats.incMarkedDeleted(i.keyspace)
 	c.stats.notifyDelete(keyspace, key, 0)
 }
 
-func (c *cache) getStats() *InstanceStats {
+func (c *cache) getStats() *SegmentStats {
 	c.mx.Lock()
 	defer c.mx.Unlock()
 	return c.stats.clone()

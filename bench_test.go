@@ -13,7 +13,7 @@ import (
 const (
 	emulateMultiCoreMode = 4
 	cacheSize            = 1 << 30
-	segmentSize          = 1 << 10
+	chunkSize            = 1 << 10
 )
 
 type cacheIFace interface {
@@ -102,9 +102,9 @@ func benchmark(b *testing.B, parallel, itemCount, concurrent int, create func(Op
 	}
 
 	c := createCache(itemCount, Options{
-		CacheSize:        cacheSize,
-		SegmentSize:      segmentSize,
-		maxInstanceCount: parallel,
+		CacheSize:       cacheSize,
+		ChunkSize:       chunkSize,
+		maxSegmentCount: parallel,
 	}, create)
 	defer c.Close()
 
