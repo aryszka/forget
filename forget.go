@@ -43,7 +43,7 @@ type Options struct {
 type Cache struct {
 	options     Options
 	maxItemSize int
-	cache       []*cache
+	segments    []*cache
 }
 
 // Space is equivalent to Cache but it uses only a single keyspace.
@@ -93,15 +93,15 @@ func New(o Options) *Cache {
 	}
 
 	n := newNotify(o.Notify, o.NotifyMask)
-	c := make([]*cache, segmentCount)
-	for i := range c {
-		c[i] = newCache(chunkCount, o.ChunkSize, n)
+	segments := make([]*cache, segmentCount)
+	for i := range segments {
+		segments[i] = newCache(chunkCount, o.ChunkSize, n)
 	}
 
 	return &Cache{
 		options:     o,
 		maxItemSize: segmentSize,
-		cache:       c,
+		segments:    segments,
 	}
 }
 
@@ -111,9 +111,9 @@ func (c *Cache) hash(key string) uint64 {
 	return h.Sum64()
 }
 
-func (c *Cache) getCache(hash uint64) *cache {
+func (c *Cache) getSegment(hash uint64) *cache {
 	// take the cache segment based on the middle of the key hash
-	return c.cache[int(hash>>32)%len(c.cache)]
+	return c.segments[int(hash>>32)%len(c.segments)]
 }
 
 // copies from a reader to a writer with a buffer of the same size as the used chunks
@@ -129,7 +129,7 @@ func (c *Cache) copy(to io.Writer, from io.Reader) (int64, error) {
 // finished.
 func (c *Cache) Get(keyspace, key string) (io.ReadCloser, bool) {
 	h := c.hash(key)
-	ci := c.getCache(h)
+	ci := c.getSegment(h)
 	return ci.get(h, keyspace, key)
 }
 
@@ -172,7 +172,7 @@ func (c *Cache) Set(keyspace, key string, ttl time.Duration) (io.WriteCloser, bo
 	}
 
 	h := c.hash(key)
-	ci := c.getCache(h)
+	ci := c.getSegment(h)
 	return ci.set(h, keyspace, key, ttl)
 }
 
@@ -207,14 +207,14 @@ func (c *Cache) SetBytes(keyspace, key string, data []byte, ttl time.Duration) b
 // Delete deletes an item from the cache with a keyspace and key.
 func (c *Cache) Delete(keyspace, key string) {
 	h := c.hash(key)
-	ci := c.getCache(h)
+	ci := c.getSegment(h)
 	ci.del(h, keyspace, key)
 }
 
 // Stats returns approximate statistics about the cache state.
 func (c *Cache) Stats() *CacheStats {
-	s := make([]*SegmentStats, 0, len(c.cache))
-	for _, ci := range c.cache {
+	s := make([]*SegmentStats, 0, len(c.segments))
+	for _, ci := range c.segments {
 		s = append(s, ci.getStats())
 	}
 
@@ -223,7 +223,7 @@ func (c *Cache) Stats() *CacheStats {
 
 // Close shuts down the cache and releases resources.
 func (c *Cache) Close() {
-	for _, ci := range c.cache {
+	for _, ci := range c.segments {
 		ci.close()
 	}
 }

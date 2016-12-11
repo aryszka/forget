@@ -1349,7 +1349,7 @@ func TestNoMoreSegmentsThanMaxProcs(t *testing.T) {
 	c := New(Options{})
 	defer c.Close()
 
-	if len(c.cache) != runtime.GOMAXPROCS(-1) {
+	if len(c.segments) != runtime.GOMAXPROCS(-1) {
 		t.Error("failed to set the segment count to GOMAXPROCS")
 	}
 }
