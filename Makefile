@@ -1,13 +1,13 @@
-.PHONY: build install cpu mem fmt vet lint
+.PHONY: cpu mem
+
+SOURCES = $(shell find . -name '*.go')
 
 default: build
 
-all: build cover install lint
-
-build:
+build: $(SOURCES)
 	go build
 
-install:
+install: $(SOURCES)
 	go install
 
 check: build
@@ -34,22 +34,22 @@ cover: gencover
 showcover: gencover
 	go tool cover -html cover.out
 
-fmt:
+fmt: $(SOURCES)
 	gofmt -w -s ./*.go
 
-vet:
+vet: $(SOURCES)
 	go vet
 
-check-cyclo:
+check-cyclo: $(SOURCES)
 	gocyclo -over 15 .
 
-check-ineffassign:
+check-ineffassign: $(SOURCES)
 	ineffassign .
 
-check-spell:
+check-spell: $(SOURCES) README.md Makefile
 	misspell -error README.md Makefile *.go
 
-lint:
+lint: $(SOURCES)
 	golint -set_exit_status -min_confidence 0.9
 
-precommit: fmt cover vet check-cyclo check-ineffassign check-spell lint
+precommit: build check fmt cover vet check-cyclo check-ineffassign check-spell lint
