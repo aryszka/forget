@@ -11,13 +11,13 @@ import (
 	"time"
 )
 
-func Example_fill() {
+func Example_cachefill() {
 	// create a test backend server
 	testContent := []byte{1, 2, 3}
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// send slow content
 		for _, b := range testContent {
-			time.Sleep(9 * time.Millisecond)
+			time.Sleep(12 * time.Millisecond)
 			w.Write([]byte{b})
 		}
 
@@ -26,7 +26,7 @@ func Example_fill() {
 	defer backend.Close()
 
 	// create a caching proxy
-	c := New(Options{CacheSize: 1 << 20, SegmentSize: 10})
+	c := New(Options{CacheSize: 1 << 20, SegmentSize: 1 << 10})
 	cacheServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// check if it is a hit
 		if r, ok := c.Get("default", r.URL.Path); ok {
@@ -36,14 +36,14 @@ func Example_fill() {
 			return
 		}
 
-		// if it is a miss, optimistically set the cache item
+		// if it is a miss, optimistically create a cache item
 		fmt.Println("miss")
 		cacheItem, itemCreated := c.Set("default", r.URL.Path, time.Minute)
 		if itemCreated {
 			defer cacheItem.Close()
 		}
 
-		// request the actual content
+		// initiate the streaming of the actual content
 		rsp, err := http.Get(backend.URL + r.URL.Path)
 		if err != nil {
 			// if the request fails, we can discard the invalid cache item
@@ -53,13 +53,14 @@ func Example_fill() {
 		}
 		defer rsp.Body.Close()
 
+		// initiate the outgoing response
 		w.WriteHeader(rsp.StatusCode)
 		if !itemCreated {
 			io.Copy(w, rsp.Body)
 			return
 		}
 
-		// caching only responses with status 200
+		// cache only the responses with status 200
 		var body io.Reader = rsp.Body
 		if rsp.StatusCode == http.StatusOK {
 			body = io.TeeReader(body, cacheItem)
@@ -67,7 +68,7 @@ func Example_fill() {
 			c.Del("default", r.URL.Path)
 		}
 
-		// send the response to the client and into the cache.
+		// send the response to the client and, on success, to the cache through the tee reader.
 		// if it fails, delete the invalid cache item
 		if _, err := io.Copy(w, body); err != nil {
 			c.Del("default", r.URL.Path)

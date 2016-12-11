@@ -265,7 +265,11 @@ func (s *InstanceStats) notifyDelete(keyspace, key string, size int) {
 	s.notifyRemove(Delete, keyspace, key, size)
 }
 
-func (s *InstanceStats) notifyExpire(keyspace, key string, size int) {
+func (s *InstanceStats) notifyExpire(keyspace, key string) {
+	s.notifyRemove(Expire|Miss, keyspace, key, 0)
+}
+
+func (s *InstanceStats) notifyExpireDelete(keyspace, key string, size int) {
 	s.notifyRemove(Expire|Delete|Miss, keyspace, key, size)
 }
 

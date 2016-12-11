@@ -3,6 +3,7 @@ package forget
 import (
 	"bytes"
 	"io"
+	"io/ioutil"
 	"runtime"
 	"sync"
 	"testing"
@@ -605,7 +606,7 @@ func TestWriteToCompleteEntry(t *testing.T) {
 	}
 }
 
-func TestCloseWriteTwice(t *testing.T) {
+func TestCloseWriterTwice(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
@@ -1210,19 +1211,38 @@ func TestEvictFirstFromOwnKeyspace(t *testing.T) {
 }
 
 func TestEvictFromOtherKeyspace(t *testing.T) {
-	c := New(Options{CacheSize: 6, SegmentSize: 3, maxInstanceCount: 1})
-	defer c.Close()
+	t.Run("first keyspace available", func(t *testing.T) {
+		c := New(Options{CacheSize: 6, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
 
-	for ks, k := range map[string]string{
-		"s1": "foo",
-		"s2": "bar",
-		"s3": "baz",
-	} {
-		if !c.SetKey(ks, k, time.Hour) {
-			t.Error("failed to set item")
-			return
+		for ks, k := range map[string]string{
+			"s1": "foo",
+			"s2": "bar",
+			"s3": "baz",
+		} {
+			if !c.SetKey(ks, k, time.Hour) {
+				t.Error("failed to set item")
+				return
+			}
 		}
-	}
+	})
+
+	t.Run("move to next keyspace when needed", func(t *testing.T) {
+		c := New(Options{CacheSize: 6, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
+
+		c.SetKey("s1", "foo", time.Hour)
+		c.SetKey("s2", "bar", time.Hour)
+
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		c.SetKey("s3", "baz", time.Hour)
+
+		if !c.GetKey("s1", "foo") || c.GetKey("s2", "bar") || !c.GetKey("s3", "baz") {
+			t.Error("failed to evict the right item")
+		}
+	})
 }
 
 func TestEvictFromOtherKeyspaceRoundRobin(t *testing.T) {
@@ -1533,4 +1553,408 @@ func TestReleaseMemoryOnFailedKeyWrite(t *testing.T) {
 	case <-time.After(12 * time.Millisecond):
 		t.Error("timeout")
 	}
+}
+
+func TestDeleteCases(t *testing.T) {
+	t.Run("no read, no write -> deleted", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.Del("s1", "foo")
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to delete")
+		}
+	})
+
+	t.Run("no read, write -> deleted", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", time.Hour)
+		defer w.Close()
+
+		c.Del("s1", "foo")
+		if _, err := w.Write([]byte{1, 2, 3}); err != ErrItemDiscarded {
+			t.Error(err)
+		}
+	})
+
+	t.Run("read, no write -> marked for delete", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		c.Del("s1", "foo")
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to mark item for delete")
+			return
+		}
+
+		if b, err := ioutil.ReadAll(r); err != nil || !bytes.Equal(b, []byte{1, 2, 3}) {
+			t.Error("failed to read data", err, b)
+			return
+		}
+	})
+
+	t.Run("read, write -> deleted", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", time.Hour)
+		defer w.Close()
+
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		c.Del("s1", "foo")
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to delete item")
+			return
+		}
+
+		if _, err := w.Write([]byte{1, 2, 3}); err != ErrItemDiscarded {
+			t.Error("failed to delete item")
+		}
+
+		if _, err := r.Read(make([]byte, 3)); err != ErrItemDiscarded {
+			t.Error("failed to delete item")
+		}
+	})
+}
+
+func TestExpireCases(t *testing.T) {
+	t.Run("no read, no write -> deleted", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, -time.Millisecond)
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to expire item")
+		}
+	})
+
+	t.Run("no read, write -> deleted", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", -time.Millisecond)
+		defer w.Close()
+
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to expire item")
+		}
+
+		if _, err := w.Write([]byte{1, 2, 3}); err != ErrItemDiscarded {
+			t.Error("failed to expire item")
+		}
+	})
+
+	t.Run("read, no write -> marked for delete", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip()
+		}
+
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, 12*time.Millisecond)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		time.Sleep(36 * time.Millisecond)
+
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to mark deleted")
+		}
+
+		if b, err := ioutil.ReadAll(r); err != nil || !bytes.Equal(b, []byte{1, 2, 3}) {
+			t.Error("failed to read data", err, b)
+			return
+		}
+	})
+
+	t.Run("read, write -> deleted", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip()
+		}
+
+		c := newTestCache()
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", 12*time.Millisecond)
+		defer w.Close()
+
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		time.Sleep(36 * time.Millisecond)
+
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to mark deleted")
+		}
+
+		if _, err := w.Write([]byte{1, 2, 3}); err != ErrItemDiscarded {
+			t.Error("failed to delete item")
+		}
+
+		if _, err := r.Read(make([]byte, 3)); err != ErrItemDiscarded {
+			t.Error("failed to delete item")
+		}
+	})
+}
+
+func TestResetCases(t *testing.T) {
+	t.Run("no read, no write -> deleted", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "foo", []byte{4, 5, 6}, time.Hour)
+		if b, ok := c.GetBytes("s1", "foo"); !ok || !bytes.Equal(b, []byte{4, 5, 6}) {
+			t.Error("failed to reset item")
+		}
+	})
+
+	t.Run("no read, write -> deleted", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", time.Hour)
+		defer w.Close()
+
+		c.SetBytes("s1", "foo", []byte{4, 5, 6}, time.Hour)
+		if _, err := w.Write([]byte{1, 2, 3}); err != ErrItemDiscarded {
+			t.Error("failed to reset item")
+		}
+
+		if b, ok := c.GetBytes("s1", "foo"); !ok || !bytes.Equal(b, []byte{4, 5, 6}) {
+			t.Error("failed to reset item")
+		}
+	})
+
+	t.Run("read, no write -> marked for delete", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		c.SetBytes("s1", "foo", []byte{4, 5, 6}, time.Hour)
+		if b, err := ioutil.ReadAll(r); err != nil || !bytes.Equal(b, []byte{1, 2, 3}) {
+			t.Error("failed to mark for delete")
+		}
+
+		if b, ok := c.GetBytes("s1", "foo"); !ok || !bytes.Equal(b, []byte{4, 5, 6}) {
+			t.Error("failed to reset item")
+		}
+	})
+
+	t.Run("read, write -> deleted", func(t *testing.T) {
+		c := newTestCache()
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", time.Hour)
+		defer w.Close()
+
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		c.SetBytes("s1", "foo", []byte{4, 5, 6}, time.Hour)
+
+		if _, err := w.Write([]byte{1, 2, 3}); err != ErrItemDiscarded {
+			t.Error("failed to delete item")
+		}
+
+		if _, err := r.Read(make([]byte, 3)); err != ErrItemDiscarded {
+			t.Error("failed to delete item")
+		}
+
+		if b, ok := c.GetBytes("s1", "foo"); !ok || !bytes.Equal(b, []byte{4, 5, 6}) {
+			t.Error("faled to reset item")
+		}
+	})
+}
+
+func TestEvictCases(t *testing.T) {
+	t.Run("no read, no write, no content -> not deleted", func(t *testing.T) {
+		c := New(Options{CacheSize: 6, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
+
+		c.SetBytes("s1", "", nil, time.Hour)
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.GetKey("s1", "foo") // ensure "" is next in LRU
+		c.SetBytes("s1", "bar", []byte{4, 5, 6}, time.Hour)
+
+		if !c.GetKey("s1", "") {
+			t.Error("empty item evicted")
+		}
+
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to evict item")
+		}
+
+		if b, ok := c.GetBytes("s1", "bar"); !ok || !bytes.Equal(b, []byte{4, 5, 6}) {
+			t.Error("failed to set item")
+		}
+	})
+
+	t.Run("no read, no write -> deleted", func(t *testing.T) {
+		c := New(Options{CacheSize: 12, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "bar", []byte{4, 5, 6}, time.Hour)
+		c.GetKey("s1", "bar") // ensure "foo" is next in LRU
+		c.SetBytes("s1", "baz", []byte{7, 8, 9}, time.Hour)
+
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to evict item")
+		}
+
+		if !c.GetKey("s1", "bar") {
+			t.Error("failed to keep item")
+		}
+
+		if b, ok := c.GetBytes("s1", "baz"); !ok || !bytes.Equal(b, []byte{7, 8, 9}) {
+			t.Error("failed to set item")
+		}
+	})
+
+	t.Run("no read, write -> deleted", func(t *testing.T) {
+		c := New(Options{CacheSize: 12, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", time.Hour)
+		defer w.Close()
+
+		c.SetBytes("s1", "bar", []byte{4, 5, 6}, time.Hour)
+		c.GetKey("s1", "bar") // ensure "foo" is next in LRU
+		c.SetBytes("s1", "baz", []byte{7, 8, 9}, time.Hour)
+
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to evict item")
+		}
+
+		if !c.GetKey("s1", "bar") {
+			t.Error("failed to keep item")
+		}
+
+		if b, ok := c.GetBytes("s1", "baz"); !ok || !bytes.Equal(b, []byte{7, 8, 9}) {
+			t.Error("failed to set item")
+		}
+
+		if _, err := w.Write([]byte{1, 2, 3}); err != ErrItemDiscarded {
+			t.Error("failed to evict item")
+		}
+	})
+
+	t.Run("read, no write -> not deleted", func(t *testing.T) {
+		c := New(Options{CacheSize: 12, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		c.SetBytes("s1", "bar", []byte{4, 5, 6}, time.Hour)
+		c.GetKey("s1", "bar") // ensure "foo" is next in LRU
+		c.SetBytes("s1", "baz", []byte{7, 8, 9}, time.Hour)
+
+		if b, ok := c.GetBytes("s1", "foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3}) {
+			t.Error("failed to keep item")
+		}
+
+		if c.GetKey("s1", "bar") {
+			t.Error("failed to evict item")
+		}
+
+		if b, ok := c.GetBytes("s1", "baz"); !ok || !bytes.Equal(b, []byte{7, 8, 9}) {
+			t.Error("failed to set item")
+		}
+	})
+
+	t.Run("read, write -> deleted", func(t *testing.T) {
+		c := New(Options{CacheSize: 12, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
+
+		w, _ := c.Set("s1", "foo", time.Hour)
+		defer w.Close()
+
+		r, _ := c.Get("s1", "foo")
+		defer r.Close()
+
+		c.SetBytes("s1", "bar", []byte{4, 5, 6}, time.Hour)
+		c.GetKey("s1", "bar") // ensure "foo" is next in LRU
+		c.SetBytes("s1", "baz", []byte{7, 8, 9}, time.Hour)
+
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to evict item")
+		}
+
+		if !c.GetKey("s1", "bar") {
+			t.Error("failed to keep item")
+		}
+
+		if b, ok := c.GetBytes("s1", "baz"); !ok || !bytes.Equal(b, []byte{7, 8, 9}) {
+			t.Error("failed to set item")
+		}
+	})
+}
+
+func TestEvictFromDeleted(t *testing.T) {
+	t.Run("when read done", func(t *testing.T) {
+		c := New(Options{CacheSize: 6, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		r, _ := c.Get("s1", "foo")
+
+		c.Del("s1", "foo")
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to delete item")
+		}
+
+		r.Close()
+
+		c.SetBytes("s1", "bar", []byte{4, 5, 6}, time.Hour)
+		if !c.GetKey("s1", "bar") {
+			t.Error("failed to create item")
+		}
+	})
+
+	t.Run("skip that is not done", func(t *testing.T) {
+		c := New(Options{CacheSize: 12, SegmentSize: 3, maxInstanceCount: 1})
+		defer c.Close()
+
+		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
+		c.SetBytes("s1", "bar", []byte{1, 2, 3}, time.Hour)
+
+		rfoo, _ := c.Get("s1", "foo")
+		defer rfoo.Close()
+
+		rbar, _ := c.Get("s1", "bar")
+
+		c.Del("s1", "foo")
+		c.Del("s1", "bar")
+
+		if c.GetKey("s1", "foo") {
+			t.Error("failed to delete item")
+		}
+
+		if c.GetKey("s1", "bar") {
+			t.Error("failed to delete item")
+		}
+
+		rbar.Close()
+
+		c.SetBytes("s1", "baz", []byte{4, 5, 6}, time.Hour)
+		if !c.GetKey("s1", "baz") {
+			t.Error("failed to create item")
+		}
+	})
 }
