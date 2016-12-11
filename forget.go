@@ -272,9 +272,6 @@ func (s *SingleSpace) Del(key string) {
 // Close shuts down the cache and releases resource.
 func (s *SingleSpace) Close() { s.cache.Close() }
 
-// check the stats
-// notify only from the main functions
-// explanation to the fill example
 // dec readers on delete from reader close
 // rename SingleSpace to Space
 // collision stats

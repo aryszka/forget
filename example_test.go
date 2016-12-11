@@ -12,6 +12,11 @@ import (
 )
 
 func Example_cachefill() {
+	// The following example shows a backend server and a caching proxy in front of it. The backend produces
+	// an expensive resource. The proxy caches it, it prevents multiple requests reaching the backend in
+	// case of a cache miss, and serves any data to multiple clients in parallel as soon as it is available.
+	// (See the order of the output.)
+
 	// create a test backend server
 	testContent := []byte{1, 2, 3}
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
