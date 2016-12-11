@@ -40,10 +40,16 @@ fmt:
 vet:
 	go vet
 
-lint:
-	golint -set_exit_status -min_confidence 0.9
+check-cyclo:
 	gocyclo -over 15 .
+
+check-ineffassign:
 	ineffassign .
+
+check-spell:
 	misspell -error README.md Makefile *.go
 
-precommit: fmt cover vet lint
+lint:
+	golint -set_exit_status -min_confidence 0.9
+
+precommit: fmt cover vet check-cyclo check-ineffassign check-spell lint
