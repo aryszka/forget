@@ -213,7 +213,7 @@ func (c *Cache) Delete(keyspace, key string) {
 
 // Stats returns approximate statistics about the cache state.
 func (c *Cache) Stats() *CacheStats {
-	s := make([]*SegmentStats, 0, len(c.segments))
+	s := make([]*segmentStats, 0, len(c.segments))
 	for _, ci := range c.segments {
 		s = append(s, ci.getStats())
 	}

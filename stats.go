@@ -97,20 +97,12 @@ type Stats struct {
 	KeyCollisions int
 }
 
-// SegmentStats objects contain statistics about an internal cache segment.
-type SegmentStats struct {
-
-	// Total contains the statistics about a cache segment.
-	Total *Stats
-
-	// AvailableMemory tells how many memory is avalable in a cache segment for new items or further writing.
-	AvailableMemory int
-
-	// Keyspaces contain statistics split by keyspaces in a cache segment.
-	Keyspaces map[string]*Stats
-
-	chunkSize int
-	notify    *notify
+type segmentStats struct {
+	total           *Stats
+	availableMemory int
+	keyspaces       map[string]*Stats
+	chunkSize       int
+	notify          *notify
 }
 
 // CacheStats objects contain statistics about the cache, including the internal cache instnaces and keyspaces.
@@ -124,9 +116,6 @@ type CacheStats struct {
 
 	// Keyspaces contain statistics split by keyspaces in the cache.
 	Keyspaces map[string]*Stats
-
-	// Segments contains statistics split by the internal cache segments.
-	Segments []*SegmentStats
 }
 
 // String returns the string representation of an EventType value, listing all the set flags.
@@ -199,11 +188,11 @@ func (s *Stats) add(d *Stats) {
 	s.KeyCollisions += d.KeyCollisions
 }
 
-func newSegmentStats(chunkSize, availableMemory int, n *notify) *SegmentStats {
-	return &SegmentStats{
-		Total:           &Stats{},
-		AvailableMemory: availableMemory,
-		Keyspaces:       make(map[string]*Stats),
+func newSegmentStats(chunkSize, availableMemory int, n *notify) *segmentStats {
+	return &segmentStats{
+		total:           &Stats{},
+		availableMemory: availableMemory,
+		keyspaces:       make(map[string]*Stats),
 		chunkSize:       chunkSize,
 		notify:          n,
 	}
@@ -221,7 +210,7 @@ func usedSize(size, offset, chunkSize int) int {
 	return usedSize
 }
 
-func (s *SegmentStats) notifyHit(keyspace, key string) {
+func (s *segmentStats) notifyHit(keyspace, key string) {
 	s.notify.send(&Event{
 		Type:     Hit,
 		Keyspace: keyspace,
@@ -229,7 +218,7 @@ func (s *SegmentStats) notifyHit(keyspace, key string) {
 	})
 }
 
-func (s *SegmentStats) notifyMiss(keyspace, key string) {
+func (s *segmentStats) notifyMiss(keyspace, key string) {
 	s.notify.send(&Event{
 		Type:     Miss,
 		Keyspace: keyspace,
@@ -237,7 +226,7 @@ func (s *SegmentStats) notifyMiss(keyspace, key string) {
 	})
 }
 
-func (s *SegmentStats) notifySet(keyspace, key string, keySize int) {
+func (s *segmentStats) notifySet(keyspace, key string, keySize int) {
 	s.notify.send(&Event{
 		Type:                Set,
 		Keyspace:            keyspace,
@@ -247,7 +236,7 @@ func (s *SegmentStats) notifySet(keyspace, key string, keySize int) {
 	})
 }
 
-func (s *SegmentStats) notifyWriteComplete(keyspace string, keySize, contentSize int) {
+func (s *segmentStats) notifyWriteComplete(keyspace string, keySize, contentSize int) {
 	s.notify.send(&Event{
 		Type:                WriteComplete,
 		Keyspace:            keyspace,
@@ -256,7 +245,7 @@ func (s *SegmentStats) notifyWriteComplete(keyspace string, keySize, contentSize
 	})
 }
 
-func (s *SegmentStats) notifyRemove(typ EventType, keyspace, key string, size int) {
+func (s *segmentStats) notifyRemove(typ EventType, keyspace, key string, size int) {
 	s.notify.send(&Event{
 		Type:                typ,
 		Keyspace:            keyspace,
@@ -266,23 +255,23 @@ func (s *SegmentStats) notifyRemove(typ EventType, keyspace, key string, size in
 	})
 }
 
-func (s *SegmentStats) notifyDelete(keyspace, key string, size int) {
+func (s *segmentStats) notifyDelete(keyspace, key string, size int) {
 	s.notifyRemove(Delete, keyspace, key, size)
 }
 
-func (s *SegmentStats) notifyExpire(keyspace, key string) {
+func (s *segmentStats) notifyExpire(keyspace, key string) {
 	s.notifyRemove(Expire|Miss, keyspace, key, 0)
 }
 
-func (s *SegmentStats) notifyExpireDelete(keyspace, key string, size int) {
+func (s *segmentStats) notifyExpireDelete(keyspace, key string, size int) {
 	s.notifyRemove(Expire|Delete|Miss, keyspace, key, size)
 }
 
-func (s *SegmentStats) notifyEvict(keyspace string, size int) {
+func (s *segmentStats) notifyEvict(keyspace string, size int) {
 	s.notifyRemove(Evict|Delete, keyspace, "", size)
 }
 
-func (s *SegmentStats) notifyAllocFailed(keyspace string) {
+func (s *segmentStats) notifyAllocFailed(keyspace string) {
 	s.notify.send(&Event{
 		Type:     AllocFailed,
 		Keyspace: keyspace,
@@ -290,112 +279,110 @@ func (s *SegmentStats) notifyAllocFailed(keyspace string) {
 }
 
 // tracks the changes of all the indicators caused by an added or removed item
-func (s *SegmentStats) itemChange(i *item, mod int) {
+func (s *segmentStats) itemChange(i *item, mod int) {
 	size := i.size * mod
 	usedSize := usedSize(i.size, 0, s.chunkSize) * mod
 
-	s.Total.ItemCount += mod
-	s.Total.EffectiveSize += size
-	s.Total.UsedSize += usedSize
-	s.AvailableMemory -= usedSize
+	s.total.ItemCount += mod
+	s.total.EffectiveSize += size
+	s.total.UsedSize += usedSize
+	s.availableMemory -= usedSize
 
-	ks := s.Keyspaces[i.keyspace]
+	ks := s.keyspaces[i.keyspace]
 	ks.ItemCount += mod
 	ks.EffectiveSize += size
 	ks.UsedSize += usedSize
 }
 
-func (s *SegmentStats) addItem(i *item) {
-	if _, ok := s.Keyspaces[i.keyspace]; !ok {
-		s.Keyspaces[i.keyspace] = &Stats{}
+func (s *segmentStats) addItem(i *item) {
+	if _, ok := s.keyspaces[i.keyspace]; !ok {
+		s.keyspaces[i.keyspace] = &Stats{}
 	}
 
 	s.itemChange(i, 1)
 }
 
-func (s *SegmentStats) deleteItem(i *item) {
+func (s *segmentStats) deleteItem(i *item) {
 	s.itemChange(i, -1)
-	if s.Keyspaces[i.keyspace].ItemCount == 0 {
-		delete(s.Keyspaces, i.keyspace)
+	if s.keyspaces[i.keyspace].ItemCount == 0 {
+		delete(s.keyspaces, i.keyspace)
 	}
 }
 
-func (s *SegmentStats) readersChange(keyspace string, d int) {
-	s.Total.Readers += d
-	if ks, ok := s.Keyspaces[keyspace]; ok {
+func (s *segmentStats) readersChange(keyspace string, d int) {
+	s.total.Readers += d
+	if ks, ok := s.keyspaces[keyspace]; ok {
 		ks.Readers += d
 	}
 }
 
-func (s *SegmentStats) readersOnDeletedChange(keyspace string, d int) {
-	s.Total.MarkedDeleted += d
-	if ks, ok := s.Keyspaces[keyspace]; ok {
+func (s *segmentStats) readersOnDeletedChange(keyspace string, d int) {
+	s.total.MarkedDeleted += d
+	if ks, ok := s.keyspaces[keyspace]; ok {
 		ks.MarkedDeleted += d
 	}
 }
 
-func (s *SegmentStats) writersChange(keyspace string, d int) {
-	s.Total.Writers += d
-	if ks, ok := s.Keyspaces[keyspace]; ok {
+func (s *segmentStats) writersChange(keyspace string, d int) {
+	s.total.Writers += d
+	if ks, ok := s.keyspaces[keyspace]; ok {
 		ks.Writers += d
 	}
 }
 
-func (s *SegmentStats) blockedWritersChange(keyspace string, d int) {
-	s.Total.WritersBlocked += d
-	if ks, ok := s.Keyspaces[keyspace]; ok {
+func (s *segmentStats) blockedWritersChange(keyspace string, d int) {
+	s.total.WritersBlocked += d
+	if ks, ok := s.keyspaces[keyspace]; ok {
 		ks.WritersBlocked += d
 	}
 }
 
-func (s *SegmentStats) keyCollisionsChange(keyspace string, d int) {
-	s.Total.KeyCollisions += d
-	if ks, ok := s.Keyspaces[keyspace]; ok {
+func (s *segmentStats) keyCollisionsChange(keyspace string, d int) {
+	s.total.KeyCollisions += d
+	if ks, ok := s.keyspaces[keyspace]; ok {
 		ks.KeyCollisions += d
 	}
 }
 
-func (s *SegmentStats) incReaders(keyspace string)        { s.readersChange(keyspace, 1) }
-func (s *SegmentStats) decReaders(keyspace string)        { s.readersChange(keyspace, -1) }
-func (s *SegmentStats) incMarkedDeleted(keyspace string)  { s.readersOnDeletedChange(keyspace, 1) }
-func (s *SegmentStats) decMarkedDeleted(keyspace string)  { s.readersOnDeletedChange(keyspace, -1) }
-func (s *SegmentStats) incWriters(keyspace string)        { s.writersChange(keyspace, 1) }
-func (s *SegmentStats) decWriters(keyspace string)        { s.writersChange(keyspace, -1) }
-func (s *SegmentStats) incWritersBlocked(keyspace string) { s.blockedWritersChange(keyspace, 1) }
-func (s *SegmentStats) decWritersBlocked(keyspace string) { s.blockedWritersChange(keyspace, -1) }
-func (s *SegmentStats) incKeyCollisions(keyspace string)  { s.keyCollisionsChange(keyspace, 1) }
-func (s *SegmentStats) decKeyCollisions(keyspace string)  { s.keyCollisionsChange(keyspace, -1) }
+func (s *segmentStats) incReaders(keyspace string)        { s.readersChange(keyspace, 1) }
+func (s *segmentStats) decReaders(keyspace string)        { s.readersChange(keyspace, -1) }
+func (s *segmentStats) incMarkedDeleted(keyspace string)  { s.readersOnDeletedChange(keyspace, 1) }
+func (s *segmentStats) decMarkedDeleted(keyspace string)  { s.readersOnDeletedChange(keyspace, -1) }
+func (s *segmentStats) incWriters(keyspace string)        { s.writersChange(keyspace, 1) }
+func (s *segmentStats) decWriters(keyspace string)        { s.writersChange(keyspace, -1) }
+func (s *segmentStats) incWritersBlocked(keyspace string) { s.blockedWritersChange(keyspace, 1) }
+func (s *segmentStats) decWritersBlocked(keyspace string) { s.blockedWritersChange(keyspace, -1) }
+func (s *segmentStats) incKeyCollisions(keyspace string)  { s.keyCollisionsChange(keyspace, 1) }
+func (s *segmentStats) decKeyCollisions(keyspace string)  { s.keyCollisionsChange(keyspace, -1) }
 
-func (s *SegmentStats) clone() *SegmentStats {
-	sc := &SegmentStats{
-		AvailableMemory: s.AvailableMemory,
-		Keyspaces:       make(map[string]*Stats),
+func (s *segmentStats) clone() *segmentStats {
+	sc := &segmentStats{
+		availableMemory: s.availableMemory,
+		keyspaces:       make(map[string]*Stats),
 	}
 
-	st := *s.Total
-	sc.Total = &st
+	st := *s.total
+	sc.total = &st
 
-	for k, ks := range s.Keyspaces {
+	for k, ks := range s.keyspaces {
 		kss := *ks
-		sc.Keyspaces[k] = &kss
+		sc.keyspaces[k] = &kss
 	}
 
 	return sc
 }
 
-func newCacheStats(i []*SegmentStats) *CacheStats {
+func newCacheStats(ss []*segmentStats) *CacheStats {
 	s := &CacheStats{
 		Total:     &Stats{},
 		Keyspaces: make(map[string]*Stats),
-		Segments:  make([]*SegmentStats, 0, len(i)),
 	}
 
-	for _, ii := range i {
-		s.Total.add(ii.Total)
-		s.AvailableMemory += ii.AvailableMemory
-		s.Segments = append(s.Segments, ii)
+	for _, si := range ss {
+		s.Total.add(si.total)
+		s.AvailableMemory += si.availableMemory
 
-		for k, ks := range ii.Keyspaces {
+		for k, ks := range si.keyspaces {
 			if _, ok := s.Keyspaces[k]; !ok {
 				s.Keyspaces[k] = &Stats{}
 			}

@@ -16,7 +16,7 @@ type segment struct {
 	lruRotate    *list
 	itemLookup   [][]*item
 	closed       bool
-	stats        *SegmentStats
+	stats        *segmentStats
 }
 
 var (
@@ -409,7 +409,7 @@ func (s *segment) del(hash uint64, keyspace, key string) {
 	s.stats.notifyDelete(keyspace, key, 0)
 }
 
-func (s *segment) getStats() *SegmentStats {
+func (s *segment) getStats() *segmentStats {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 	return s.stats.clone()
