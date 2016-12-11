@@ -6,8 +6,8 @@ import (
 )
 
 type cacheIO struct {
-	cache *cache
-	item  *item
+	segment *segment
+	item    *item
 }
 
 type reader struct {
@@ -36,9 +36,9 @@ var (
 	ErrWriterClosed = errors.New("writer closed")
 )
 
-func newReader(c *cache, i *item) *reader {
+func newReader(s *segment, i *item) *reader {
 	return &reader{
-		cacheIO:       &cacheIO{cache: c, item: i},
+		cacheIO:       &cacheIO{segment: s, item: i},
 		currentChunk:  i.firstChunk,
 		chunkPosition: i.keySize,
 	}
@@ -49,8 +49,8 @@ func newReader(c *cache, i *item) *reader {
 // and the write to the item is complete, returns EOF, if reached the end but the item is still being written,
 // returns nil
 func (r *reader) readOne(p []byte) (int, error) {
-	r.cache.mx.RLock()
-	defer r.cache.mx.RUnlock()
+	r.segment.mx.RLock()
+	defer r.segment.mx.RUnlock()
 
 	if r.item == nil {
 		return 0, ErrReaderClosed
@@ -61,7 +61,7 @@ func (r *reader) readOne(p []byte) (int, error) {
 	}
 
 	if r.currentChunk != r.item.lastChunk &&
-		r.chunkPosition == r.cache.memory.chunkSize {
+		r.chunkPosition == r.segment.memory.chunkSize {
 
 		r.currentChunk = r.currentChunk.next()
 		r.chunkPosition = 0
@@ -112,17 +112,17 @@ func (r *reader) Read(p []byte) (int, error) {
 
 // closes the reader and signals read done.
 func (r *reader) Close() error {
-	defer r.cache.readDoneCond.Broadcast()
+	defer r.segment.readDoneCond.Broadcast()
 
-	r.cache.mx.Lock()
-	defer r.cache.mx.Unlock()
+	r.segment.mx.Lock()
+	defer r.segment.mx.Unlock()
 
 	if r.item == nil {
 		return ErrReaderClosed
 	}
 
 	r.item.readers--
-	r.cache.stats.decReaders(r.item.keyspace)
+	r.segment.stats.decReaders(r.item.keyspace)
 
 	r.item = nil
 	r.currentChunk = nil
@@ -130,10 +130,10 @@ func (r *reader) Close() error {
 	return nil
 }
 
-func newWriter(c *cache, i *item) *writer {
+func newWriter(s *segment, i *item) *writer {
 	return &writer{
-		cacheIO: &cacheIO{cache: c, item: i},
-		max:     c.memory.chunkCount*c.memory.chunkSize - i.keySize,
+		cacheIO: &cacheIO{segment: s, item: i},
+		max:     s.memory.chunkCount*s.memory.chunkSize - i.keySize,
 	}
 }
 
@@ -154,12 +154,12 @@ func (w *writer) Write(p []byte) (int, error) {
 		err := func() error {
 			defer w.item.writeCond.Broadcast()
 
-			w.cache.mx.Lock()
-			defer w.cache.mx.Unlock()
+			w.segment.mx.Lock()
+			defer w.segment.mx.Unlock()
 
 			// only for statistics
 			if blocked {
-				w.cache.stats.decWritersBlocked(w.item.keyspace)
+				w.segment.stats.decWritersBlocked(w.item.keyspace)
 			}
 
 			if w.item.writeComplete {
@@ -179,9 +179,9 @@ func (w *writer) Write(p []byte) (int, error) {
 				return ErrWriteLimit
 			}
 
-			err = w.cache.allocateFor(w.item)
+			err = w.segment.allocateFor(w.item)
 			if err == errAllocationFailed {
-				w.cache.stats.incWritersBlocked(w.item.keyspace)
+				w.segment.stats.incWritersBlocked(w.item.keyspace)
 			}
 
 			return err
@@ -191,9 +191,9 @@ func (w *writer) Write(p []byte) (int, error) {
 			blocked = true
 
 			// here waiting only for a change, condition checking happens during the actual write
-			w.cache.readDoneCond.L.Lock()
-			w.cache.readDoneCond.Wait()
-			w.cache.readDoneCond.L.Unlock()
+			w.segment.readDoneCond.L.Lock()
+			w.segment.readDoneCond.Wait()
+			w.segment.readDoneCond.L.Unlock()
 		} else if err != nil {
 			return count, err
 		}
@@ -206,15 +206,15 @@ func (w *writer) Write(p []byte) (int, error) {
 func (w *writer) Close() error {
 	defer w.item.writeCond.Broadcast()
 
-	w.cache.mx.Lock()
-	defer w.cache.mx.Unlock()
+	w.segment.mx.Lock()
+	defer w.segment.mx.Unlock()
 
 	if w.item.writeComplete {
 		return ErrWriterClosed
 	}
 
 	w.item.writeComplete = true
-	w.cache.stats.decWriters(w.item.keyspace)
-	w.cache.stats.notifyWriteComplete(w.item.keyspace, w.item.keySize, w.size)
+	w.segment.stats.decWriters(w.item.keyspace)
+	w.segment.stats.notifyWriteComplete(w.item.keyspace, w.item.keySize, w.size)
 	return nil
 }

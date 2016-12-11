@@ -43,7 +43,7 @@ type Options struct {
 type Cache struct {
 	options     Options
 	maxItemSize int
-	segments    []*cache
+	segments    []*segment
 }
 
 // Space is equivalent to Cache but it uses only a single keyspace.
@@ -93,7 +93,7 @@ func New(o Options) *Cache {
 	}
 
 	n := newNotify(o.Notify, o.NotifyMask)
-	segments := make([]*cache, segmentCount)
+	segments := make([]*segment, segmentCount)
 	for i := range segments {
 		segments[i] = newCache(chunkCount, o.ChunkSize, n)
 	}
@@ -111,7 +111,7 @@ func (c *Cache) hash(key string) uint64 {
 	return h.Sum64()
 }
 
-func (c *Cache) getSegment(hash uint64) *cache {
+func (c *Cache) getSegment(hash uint64) *segment {
 	// take the cache segment based on the middle of the key hash
 	return c.segments[int(hash>>32)%len(c.segments)]
 }
@@ -272,7 +272,6 @@ func (s *Space) Delete(key string) {
 // Close shuts down the cache and releases resource.
 func (s *Space) Close() { s.cache.Close() }
 
-// move implemented in the list
 // do segment stats need to be public?
 // collisions to a list
 // implement seeking
