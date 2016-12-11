@@ -245,9 +245,9 @@ func newWriter(s *segment, i *item) *Writer {
 	}
 }
 
-// writes to an item. If the writer was closed or the max item size was reached, returns an error. If the last
-// chunk of the item is full, tries to allocate a new chunk. If allocation fails due to too many active
-// readers, the write blocks until allocation becomes possible.
+// Write fills a cache item. If the writer was closed or the max item size was reached, it returns an error. If
+// the last chunk of the item is full, it tries to allocate a new chunk. If allocation fails due to too many
+// active readers, the write blocks until allocation becomes possible.
 func (w *Writer) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil

@@ -36,7 +36,7 @@ func Example_cachefill() {
 	c := forget.New(forget.Options{CacheSize: 1 << 20, ChunkSize: 1 << 10})
 	cacheServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// check if it is a hit
-		if r, ok := c.Get("default", r.URL.Path); ok {
+		if r, ok := c.Get(r.URL.Path); ok {
 			fmt.Println("hit")
 			defer r.Close()
 
@@ -59,7 +59,7 @@ func Example_cachefill() {
 
 		// if it is a miss, optimistically create a cache item
 		fmt.Println("miss")
-		cacheItem, itemCreated := c.Set("default", r.URL.Path, time.Minute)
+		cacheItem, itemCreated := c.Set(r.URL.Path, time.Minute)
 		if itemCreated {
 			defer cacheItem.Close()
 		}
@@ -68,7 +68,7 @@ func Example_cachefill() {
 		rsp, err := http.Get(backend.URL + r.URL.Path)
 		if err != nil {
 			// if the request fails, we can discard the invalid cache item
-			c.Delete("default", r.URL.Path)
+			c.Delete(r.URL.Path)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -86,13 +86,13 @@ func Example_cachefill() {
 		if rsp.StatusCode == http.StatusOK {
 			body = io.TeeReader(body, cacheItem)
 		} else {
-			c.Delete("default", r.URL.Path)
+			c.Delete(r.URL.Path)
 		}
 
 		// send the response to the client and, on success, to the cache through the tee reader.
 		// if it fails, delete the invalid cache item
 		if _, err := io.Copy(w, body); err != nil {
-			c.Delete("default", r.URL.Path)
+			c.Delete(r.URL.Path)
 		}
 	}))
 	defer c.Close()

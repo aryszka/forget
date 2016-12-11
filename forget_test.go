@@ -231,11 +231,11 @@ var delTests = []opTest{{
 	},
 }}
 
-func newTestCache() *Cache {
-	return New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+func newTestCache() *CacheSpaces {
+	return NewCacheSpaces(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 }
 
-func initTestCache(init testInit) *Cache {
+func initTestCache(init testInit) *CacheSpaces {
 	c := newTestCache()
 	for ks, s := range init {
 		for k, v := range s {
@@ -248,7 +248,7 @@ func initTestCache(init testInit) *Cache {
 	return c
 }
 
-func checkCacheWithContent(c *Cache, check testInit, withContent bool) bool {
+func checkCacheWithContent(c *CacheSpaces, check testInit, withContent bool) bool {
 	for ks, s := range check {
 		for k, dk := range s {
 			if d, ok := c.GetBytes(ks, k); !ok || withContent && !bytes.Equal(d, dk) {
@@ -260,7 +260,7 @@ func checkCacheWithContent(c *Cache, check testInit, withContent bool) bool {
 	return true
 }
 
-func checkCache(c *Cache, check testInit) bool {
+func checkCache(c *CacheSpaces, check testInit) bool {
 	return checkCacheWithContent(c, check, true)
 }
 
@@ -370,7 +370,7 @@ func TestSetKey(t *testing.T) {
 }
 
 func TestSetBytesOversized(t *testing.T) {
-	c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	if c.SetBytes("s1", "foo", []byte{1, 2, 3, 4, 5, 6, 7, 8, 9}, time.Hour) {
@@ -465,7 +465,7 @@ func TestReadZero(t *testing.T) {
 }
 
 func TestReadFromItemWithLongKey(t *testing.T) {
-	c := New(Options{CacheSize: 9, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 9, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	c.SetBytes("s1", "12345", []byte{1, 2, 3}, time.Hour)
@@ -645,7 +645,7 @@ func TestCloseWriterTwice(t *testing.T) {
 }
 
 func TestEvict(t *testing.T) {
-	c := New(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -670,7 +670,7 @@ func TestEvict(t *testing.T) {
 }
 
 func TestDoNotEvictCurrent(t *testing.T) {
-	c := New(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -717,7 +717,7 @@ func TestDoNotEvictCurrent(t *testing.T) {
 }
 
 func TestFailToEvict(t *testing.T) {
-	c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -744,7 +744,7 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	w, ok := c.Set("s1", "foo", time.Hour)
@@ -791,7 +791,7 @@ func TestTryReadBeyondAvailable(t *testing.T) {
 }
 
 func TestWriteAfterCacheClosed(t *testing.T) {
-	c := New(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
 	w, ok := c.Set("s1", "foo", time.Hour)
 	if !ok {
 		t.Error("failed to set item")
@@ -807,7 +807,7 @@ func TestWriteAfterCacheClosed(t *testing.T) {
 }
 
 func TestKeyTooLarge(t *testing.T) {
-	c := New(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 	if _, ok := c.Set("s1", "123456789012345", time.Hour); ok {
 		t.Error("too large key was set")
@@ -819,7 +819,7 @@ func TestKeyTooLarge(t *testing.T) {
 }
 
 func TestWriteAtChunkBoundary(t *testing.T) {
-	c := New(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	w, ok := c.Set("s1", "foo", time.Hour)
@@ -851,7 +851,7 @@ func TestWriteAtChunkBoundary(t *testing.T) {
 }
 
 func TestWriteToItemWithEmptyKey(t *testing.T) {
-	c := New(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	w, ok := c.Set("s1", "", time.Hour)
@@ -876,7 +876,7 @@ func TestWriteToItemWithEmptyKey(t *testing.T) {
 }
 
 func TestAllocateAndInsert(t *testing.T) {
-	c := New(Options{CacheSize: 24, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 24, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	w, ok := c.Set("s1", "foo", time.Hour)
@@ -898,7 +898,7 @@ func TestAllocateAndInsert(t *testing.T) {
 }
 
 func TestGetEmptyItem(t *testing.T) {
-	c := New(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetKey("s1", "", time.Hour) {
@@ -911,7 +911,7 @@ func TestGetEmptyItem(t *testing.T) {
 }
 
 func TestItemsWithDifferentKeys(t *testing.T) {
-	c := New(Options{CacheSize: 24, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 24, ChunkSize: 6, maxSegmentCount: 1})
 	c.SetKey("s1", "1", time.Hour)
 	c.SetKey("s1", "123", time.Hour)
 	c.SetKey("s1", "123456789", time.Hour)
@@ -925,7 +925,7 @@ func TestExpiration(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{CacheSize: 24, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 24, ChunkSize: 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetKey("s1", "foo", 3*time.Millisecond) {
@@ -944,7 +944,7 @@ func TestDoNotEvictWhenReading(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -979,7 +979,7 @@ func TestDoNotEvictWhenReading(t *testing.T) {
 }
 
 func TestTooLargeKey(t *testing.T) {
-	c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	if c.SetKey("s1", "123456789", time.Hour) {
@@ -988,7 +988,7 @@ func TestTooLargeKey(t *testing.T) {
 }
 
 func TestReadFromClosedCache(t *testing.T) {
-	c := New(Options{CacheSize: 24, ChunkSize: 6, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 24, ChunkSize: 6, maxSegmentCount: 1})
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
 		t.Error("failed to set item")
 		return
@@ -1013,7 +1013,7 @@ func TestBlockWriterUntilSpaceAvailable(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{CacheSize: 9, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 9, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour) {
@@ -1045,7 +1045,7 @@ func TestBlockWriterUntilSpaceAvailable(t *testing.T) {
 }
 
 func TestSingleSpaceGet(t *testing.T) {
-	c := NewSpace(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1068,7 +1068,7 @@ func TestSingleSpaceGet(t *testing.T) {
 }
 
 func TestSingleSpaceGetKey(t *testing.T) {
-	c := NewSpace(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1082,7 +1082,7 @@ func TestSingleSpaceGetKey(t *testing.T) {
 }
 
 func TestSingleSpaceGetBytes(t *testing.T) {
-	c := NewSpace(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1096,7 +1096,7 @@ func TestSingleSpaceGetBytes(t *testing.T) {
 }
 
 func TestSingleSpaceSet(t *testing.T) {
-	c := NewSpace(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	w, ok := c.Set("foo", time.Hour)
@@ -1118,7 +1118,7 @@ func TestSingleSpaceSet(t *testing.T) {
 }
 
 func TestSingleSpaceSetKey(t *testing.T) {
-	c := NewSpace(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetKey("foo", time.Hour) {
@@ -1131,7 +1131,7 @@ func TestSingleSpaceSetKey(t *testing.T) {
 }
 
 func TestSingleSpaceSetBytes(t *testing.T) {
-	c := NewSpace(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1144,7 +1144,7 @@ func TestSingleSpaceSetBytes(t *testing.T) {
 }
 
 func TestSingleSpaceDelete(t *testing.T) {
-	c := NewSpace(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetBytes("foo", []byte{1, 2, 3}, time.Hour) {
@@ -1159,8 +1159,21 @@ func TestSingleSpaceDelete(t *testing.T) {
 	}
 }
 
+func TestSingleSpaceStats(t *testing.T) {
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	defer c.Close()
+
+	c.SetBytes("foo", []byte{1, 2, 3}, time.Hour)
+	c.SetBytes("bar", []byte{4, 5, 6}, time.Hour)
+
+	s := c.Stats()
+	if s.AvailableMemory != (1<<9)-2*(1<<6) {
+		t.Error("invalid stats")
+	}
+}
+
 func TestSingleSpaceClose(t *testing.T) {
-	c := NewSpace(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
+	c := New(Options{CacheSize: 1 << 9, ChunkSize: 1 << 6, maxSegmentCount: 1})
 	defer c.Close()
 
 	c.SetBytes("foo", []byte{1, 2, 3}, time.Hour)
@@ -1192,7 +1205,7 @@ func TestSingleSpaceClose(t *testing.T) {
 }
 
 func TestEvictFirstFromOwnKeyspace(t *testing.T) {
-	c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetKey("s1", "foo", time.Hour) {
@@ -1222,7 +1235,7 @@ func TestEvictFirstFromOwnKeyspace(t *testing.T) {
 
 func TestEvictFromOtherKeyspace(t *testing.T) {
 	t.Run("first keyspace available", func(t *testing.T) {
-		c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		for ks, k := range map[string]string{
@@ -1238,7 +1251,7 @@ func TestEvictFromOtherKeyspace(t *testing.T) {
 	})
 
 	t.Run("move to next keyspace when needed", func(t *testing.T) {
-		c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		c.SetKey("s1", "foo", time.Hour)
@@ -1256,7 +1269,7 @@ func TestEvictFromOtherKeyspace(t *testing.T) {
 }
 
 func TestEvictFromOtherKeyspaceRoundRobin(t *testing.T) {
-	c := New(Options{CacheSize: 18, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 18, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	for ks, k := range map[string][]string{
@@ -1287,7 +1300,7 @@ func TestEvictFromOtherKeyspaceRoundRobin(t *testing.T) {
 }
 
 func TestUseMaxProcsDefault(t *testing.T) {
-	c := New(Options{CacheSize: 1 << 12, ChunkSize: 1 << 6})
+	c := NewCacheSpaces(Options{CacheSize: 1 << 12, ChunkSize: 1 << 6})
 	defer c.Close()
 
 	items := map[string][]string{
@@ -1356,7 +1369,7 @@ func TestNoMoreSegmentsThanMaxProcs(t *testing.T) {
 
 	runtime.GOMAXPROCS(runtime.NumCPU() / 2)
 
-	c := New(Options{})
+	c := NewCacheSpaces(Options{})
 	defer c.Close()
 
 	if len(c.segments) != runtime.GOMAXPROCS(-1) {
@@ -1394,11 +1407,11 @@ func TestNotifications(t *testing.T) {
 		}
 	}
 
-	run := func(msg string, expect EventType, f ...func(c *Cache)) {
+	run := func(msg string, expect EventType, f ...func(c *CacheSpaces)) {
 		t.Run(msg, func(t *testing.T) {
 			n := make(chan *Event, 4)
 
-			c := New(Options{CacheSize: 6, ChunkSize: 3, Notify: n, NotifyMask: All})
+			c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, Notify: n, NotifyMask: All})
 			defer c.Close()
 
 			for _, fi := range f[:len(f)-1] {
@@ -1411,38 +1424,38 @@ func TestNotifications(t *testing.T) {
 		})
 	}
 
-	noop := func(*Cache) {}
+	noop := func(*CacheSpaces) {}
 
-	run("miss", Miss, func(c *Cache) {
+	run("miss", Miss, func(c *CacheSpaces) {
 		c.GetKey("s1", "foo")
 	})
 
-	run("hit", Hit, func(c *Cache) {
+	run("hit", Hit, func(c *CacheSpaces) {
 		c.SetKey("s1", "foo", time.Hour)
-	}, noop, func(c *Cache) {
+	}, noop, func(c *CacheSpaces) {
 		c.GetKey("s1", "foo")
 	})
 
-	run("set", Set, func(c *Cache) {
+	run("set", Set, func(c *CacheSpaces) {
 		c.SetKey("s1", "foo", time.Hour)
 	})
 
-	run("delete", Delete, func(c *Cache) {
+	run("delete", Delete, func(c *CacheSpaces) {
 		c.SetKey("s1", "foo", time.Hour)
-	}, noop, func(c *Cache) {
+	}, noop, func(c *CacheSpaces) {
 		c.Delete("s1", "foo")
 	})
 
-	run("expire", Expire|Delete|Miss, func(c *Cache) {
+	run("expire", Expire|Delete|Miss, func(c *CacheSpaces) {
 		c.SetKey("s1", "foo", 3*time.Millisecond)
-	}, noop, func(c *Cache) {
+	}, noop, func(c *CacheSpaces) {
 		time.Sleep(12 * time.Millisecond)
 		c.GetKey("s1", "foo")
 	})
 
-	run("evict", Evict|Delete, func(c *Cache) {
+	run("evict", Evict|Delete, func(c *CacheSpaces) {
 		c.SetKey("s1", "foo", time.Hour)
-	}, noop, func(c *Cache) {
+	}, noop, func(c *CacheSpaces) {
 		c.SetKey("s1", "barbaz", time.Hour)
 	})
 }
@@ -1459,7 +1472,7 @@ func TestSetWhileAllBusy(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetKey("s1", "foo", time.Hour) {
@@ -1512,7 +1525,7 @@ func TestSetWhileAllBusy(t *testing.T) {
 
 func TestNotifyMaskDefaultsToNormal(t *testing.T) {
 	n := make(chan *Event, 1)
-	c := New(Options{CacheSize: 6, ChunkSize: 3, Notify: n, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, Notify: n, maxSegmentCount: 1})
 	defer c.Close()
 	c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 	c.SetBytes("s1", "bar", []byte{1, 2, 3}, time.Hour)
@@ -1527,7 +1540,7 @@ func TestReleaseMemoryOnFailedKeyWrite(t *testing.T) {
 		t.Skip()
 	}
 
-	c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+	c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 	defer c.Close()
 
 	if !c.SetKey("s1", "foo", time.Hour) {
@@ -1792,7 +1805,7 @@ func TestResetCases(t *testing.T) {
 
 func TestEvictCases(t *testing.T) {
 	t.Run("no read, no write, no content -> not deleted", func(t *testing.T) {
-		c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		c.SetBytes("s1", "", nil, time.Hour)
@@ -1814,7 +1827,7 @@ func TestEvictCases(t *testing.T) {
 	})
 
 	t.Run("no read, no write -> deleted", func(t *testing.T) {
-		c := New(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
@@ -1836,7 +1849,7 @@ func TestEvictCases(t *testing.T) {
 	})
 
 	t.Run("no read, write -> deleted", func(t *testing.T) {
-		c := New(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		w, _ := c.Set("s1", "foo", time.Hour)
@@ -1864,7 +1877,7 @@ func TestEvictCases(t *testing.T) {
 	})
 
 	t.Run("read, no write -> not deleted", func(t *testing.T) {
-		c := New(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
@@ -1889,7 +1902,7 @@ func TestEvictCases(t *testing.T) {
 	})
 
 	t.Run("read, write -> deleted", func(t *testing.T) {
-		c := New(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		w, _ := c.Set("s1", "foo", time.Hour)
@@ -1918,7 +1931,7 @@ func TestEvictCases(t *testing.T) {
 
 func TestEvictFromDeleted(t *testing.T) {
 	t.Run("when read done", func(t *testing.T) {
-		c := New(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
@@ -1938,7 +1951,7 @@ func TestEvictFromDeleted(t *testing.T) {
 	})
 
 	t.Run("skip that is not done", func(t *testing.T) {
-		c := New(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 12, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
@@ -2009,7 +2022,7 @@ func TestSeek(t *testing.T) {
 	})
 
 	t.Run("seek from start", func(t *testing.T) {
-		c := New(Options{CacheSize: 15, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 15, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		c.SetBytes("s1", "foo", []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2}, time.Hour)
@@ -2051,7 +2064,7 @@ func TestSeek(t *testing.T) {
 	})
 
 	t.Run("seek from end", func(t *testing.T) {
-		c := New(Options{CacheSize: 18, ChunkSize: 3, maxSegmentCount: 1})
+		c := NewCacheSpaces(Options{CacheSize: 18, ChunkSize: 3, maxSegmentCount: 1})
 		defer c.Close()
 
 		c.SetBytes("s1", "foo", []byte("123456789012435"), time.Hour)

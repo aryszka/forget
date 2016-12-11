@@ -23,7 +23,7 @@ type cacheIFace interface {
 }
 
 type forgetCache struct {
-	cache *Cache
+	cache *CacheSpaces
 }
 
 type buffer struct {
@@ -146,7 +146,7 @@ func executeSet(c cacheIFace, key string) {
 	}
 }
 
-func newForget(o Options) cacheIFace { return forgetCache{New(o)} }
+func newForget(o Options) cacheIFace { return forgetCache{NewCacheSpaces(o)} }
 
 func benchmarkRange(b *testing.B, parallel, concurrent int, create func(Options) cacheIFace, execute func(cacheIFace)) {
 	for _, itemCount := range []int{0, 10, 1000, 100000} {
