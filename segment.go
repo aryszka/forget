@@ -13,7 +13,7 @@ type segment struct {
 	deleteQueue  *list
 	lruLookup    map[string]*list
 	lruRotate    *list
-	itemLookup   [][]*item
+	itemLookup   []map[string][]*item
 	closed       bool
 	stats        *segmentStats
 }
@@ -33,7 +33,7 @@ func newCache(chunkCount, chunkSize int, notify *notify) *segment {
 		lruLookup:    make(map[string]*list),
 		lruRotate:    &list{},
 		deleteQueue:  &list{},
-		itemLookup:   make([][]*item, chunkCount), // there cannot be more entries than chunks
+		itemLookup:   make([]map[string][]*item, chunkCount), // there cannot be more entries than chunks
 		stats:        newSegmentStats(chunkSize, chunkCount*chunkSize, notify),
 	}
 }
@@ -45,8 +45,8 @@ func (s *segment) bucketIndex(hash uint64) int {
 
 // finds an item based on the hash, keyspace and key
 func (s *segment) lookup(hash uint64, keyspace, key string) (*item, bool) {
-	for _, i := range s.itemLookup[s.bucketIndex(hash)] {
-		if i.keyspace == keyspace && i.keyEquals(key) {
+	for _, i := range s.itemLookup[s.bucketIndex(hash)][keyspace] {
+		if i.keyEquals(key) {
 			return i, true
 		}
 	}
@@ -57,20 +57,26 @@ func (s *segment) lookup(hash uint64, keyspace, key string) (*item, bool) {
 // stores an item in the right lookup bucket
 func (s *segment) addLookup(hash uint64, i *item) {
 	index := s.bucketIndex(hash)
-	s.itemLookup[index] = append(s.itemLookup[index], i)
-	if len(s.itemLookup) > 1 {
+	keyspaceItems := s.itemLookup[index]
+	if keyspaceItems == nil {
+		keyspaceItems = make(map[string][]*item)
+		s.itemLookup[index] = keyspaceItems
+	}
+
+	keyspaceItems[i.keyspace] = append(keyspaceItems[i.keyspace], i)
+	if len(keyspaceItems[i.keyspace]) > 1 {
 		s.stats.incKeyCollisions(i.keyspace)
 	}
 }
 
 func (s *segment) deleteLookup(i *item) {
 	bi := s.bucketIndex(i.hash)
-	bucket := s.itemLookup[bi]
+	bucket := s.itemLookup[bi][i.keyspace]
 	for bii, ii := range bucket {
 		if ii == i {
 			last := len(bucket) - 1
 			bucket[last], bucket[bii], bucket = nil, bucket[last], bucket[:last]
-			s.itemLookup[bi] = bucket
+			s.itemLookup[bi][i.keyspace] = bucket
 			if len(s.itemLookup) > 0 {
 				s.stats.decKeyCollisions(i.keyspace)
 			}
