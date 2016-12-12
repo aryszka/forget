@@ -36,10 +36,10 @@ The associated data of the keys can be accessed for read, seek and write through
 a shortcut, the data can be retrieved or set as a single byte slice, too. When using the IO interfaces, the item
 data can be accessed concurrently, and reading from an item can be started before the write has finished. When
 the reader reaches a point that was not yet filled by the writer, it blocks, and continues only when more data
-was written, or returns with EOF once the write was finished.
+was written, or returns with EOF once the write has finished.
 
-While writing an item, chunks are continuously assigned to the item from the free range of allocated memory. If
-there are no free chunks, the cache evicts enough of the least recently used items. The cache doesn't evict
+While writing an item, chunks are continuously assigned to the item from the free range of the allocated memory.
+If there are no free chunks, the cache evicts enough of the least recently used items. The cache doesn't evict
 those items that are currently being read by an unclosed reader. Similarly, when deleting an item or overwriting
 one, if it has active readers associated with it, the item is only marked for delete, but the active readers can
 finish reading from it.

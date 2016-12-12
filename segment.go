@@ -227,15 +227,9 @@ func (s *segment) evictFromOtherKeyspaces(i *item) bool {
 // checking if no reader is blocking them anymore. Next tries in the item's own keyspace. Last tries all other
 // keyspaces in a round-robin fashion
 func (s *segment) evictForItem(i *item) bool {
-	if s.evictFromDeleted() {
-		return true
-	}
-
-	if s.evictFromOwnKeyspace(i) {
-		return true
-	}
-
-	return s.evictFromOtherKeyspaces(i)
+	return s.evictFromDeleted() ||
+		s.evictFromOwnKeyspace(i) ||
+		s.evictFromOtherKeyspaces(i)
 }
 
 // tries to allocate a single chunk in the free memory space. If it fails, tries to evict an item. When
