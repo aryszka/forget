@@ -69,7 +69,7 @@ type notify struct {
 	listener chan<- *Event
 }
 
-// Stats objects contain cache statistics the cache and keyspaces.
+// Stats objects contain statistics about the cache and keyspaces.
 type Stats struct {
 
 	// ItemCount indicates the number of stored items.

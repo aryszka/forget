@@ -23,25 +23,7 @@ type Writer struct {
 	max, size int
 }
 
-var (
-	// ErrItemDiscarded is returned by IO operations when an item has been discarded, e.g. evicted, deleted or
-	// the discarded due to the cache was closed.
-	ErrItemDiscarded = errors.New("item discarded")
-
-	// ErrWriteLimit is returned when writing to an item fills the available size.
-	ErrWriteLimit = errors.New("write limit")
-
-	// ErrReaderClosed is returned when reading from or closing a reader that was already closed before.
-	ErrReaderClosed = errors.New("writer closed")
-
-	// ErrWriterClosed is returned when writing to or closing a writer that was already closed before.
-	ErrWriterClosed = errors.New("writer closed")
-
-	// ErrInvalidSeekOffset is returned by Seek() when trying to seek to an invalid position.
-	ErrInvalidSeekOffset = errors.New("invalid seek offset")
-
-	errWaitingForWrite = errors.New("waiting for write")
-)
+var errWaitingForWrite = errors.New("waiting for write")
 
 // returns the chunk index and the chunk offset based on a global offset and the current chunk size
 func (c *cacheIO) offsetToChunks(offset int) (int, int) {

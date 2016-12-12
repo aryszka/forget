@@ -18,12 +18,7 @@ type segment struct {
 	stats        *segmentStats
 }
 
-var (
-	errAllocationFailed = errors.New("allocation for key failed")
-
-	// ErrCacheClosed is returned when calling an operation on a closed cache.
-	ErrCacheClosed = errors.New("cache closed")
-)
+var errAllocationFailed = errors.New("allocation for key failed")
 
 func newSegment(chunkCount, chunkSize int, notify *notify) *segment {
 	return &segment{

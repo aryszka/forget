@@ -2,6 +2,7 @@ package forget
 
 import (
 	"bytes"
+	"errors"
 	"hash"
 	"hash/fnv"
 	"io"
@@ -54,6 +55,27 @@ type CacheSpaces struct {
 	maxItemSize int
 	segments    []*segment
 }
+
+var (
+	// ErrItemDiscarded is returned by IO operations when an item has been discarded, e.g. evicted, deleted or
+	// the discarded due to the cache was closed.
+	ErrItemDiscarded = errors.New("item discarded")
+
+	// ErrWriteLimit is returned when writing to an item fills the available size.
+	ErrWriteLimit = errors.New("write limit")
+
+	// ErrReaderClosed is returned when reading from or closing a reader that was already closed before.
+	ErrReaderClosed = errors.New("writer closed")
+
+	// ErrWriterClosed is returned when writing to or closing a writer that was already closed before.
+	ErrWriterClosed = errors.New("writer closed")
+
+	// ErrInvalidSeekOffset is returned by Seek() when trying to seek to an invalid position.
+	ErrInvalidSeekOffset = errors.New("invalid seek offset")
+
+	// ErrCacheClosed is returned when calling an operation on a closed cache.
+	ErrCacheClosed = errors.New("cache closed")
+)
 
 // New initializes a cache.
 //
