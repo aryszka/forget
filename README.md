@@ -4,41 +4,43 @@
 
 # Forget
 
-Forget is a Go library providing in-memory caching. It can be used as a safe, in-process cache for storing binary
-data with keys and keyspaces.
+Forget is a Go library for in-memory caching. It can be used as a safe, in-process cache for storing binary
+data:
 
-- uses a hard memory limit for the combined byte size of the cached data;
-- preallocates the maximum required memory in advance;
-- uses keys and keyspaces to identify cached items, so that a key can appear in multiple keyspaces with
-  different cached data; 
-- supports concurrent, streaming-style read and write of the cached data;
-- supports TTL based expiration, where every item can have a different TTL;
-- evicts the least recently used item from the cache when there is no more space for new items (LRU);
-- evicts first the items in the keyspace of the new item, fitting this way less frequently accessed but more
-  expensive recources next to frequently accessed but cheaper ones, staying within a shared memory limit;
-- provides continuous usage statistics for monitoring health and performance;
-- supports to run any number of segments in a process with different configuration;
+- supports use cases with different characteristics: key store, cache for small and large binary data;
+- has a simple get/set/delete interface;
+- implements TTL based expiration;
+- implements LRU style eviction optimized with keyspaces;
+- allocates the predefined maximum used memory in advance, on startup;
+- supports streaming style read/write IO, with seeking and immediate read access to items being filled;
+- protects busy items from delete, reset and eviction;
+- all operations are ready for concurrent access, and, as much as possible, accessible in parallel;
+- supports monitoring with detailed statistics and continuous notifications;
 
 ### Documentation:
 
-More details about the usage and the package description can be found here:
+The detailed description of the library and its usage can be found in Godoc:
 
 [https://godoc.org/github.com/aryszka/forget](https://godoc.org/github.com/aryszka/forget)
 
 ### Example:
 
 ```
-c := forget.New(forget.Options{MaxSize: 1 << 9, ChunkSize: 1 << 6})
+// intialize a cache with 1MB cache size and 1KB chunk size
+c := forget.New(forget.Options{CacheSize: 1 << 20, ChunkSize: 1 << 10})
 defer c.Close()
 
-c.SetBytes("pages", "/home", []byte("Hello, world!"), time.Minute)
-c.SetBytes("pages", "/article-one", []byte("This is cached."), time.Minute)
-c.SetBytes("ajax-data", "/api/site-index", []byte(`{"data": 42}`), 12*time.Minute)
+// store a cache item
+if !c.SetBytes("foo", []byte("bar"), time.Minute) {
+	log.Println("failed to set cache item")
+	return
+}
 
-if d, ok := c.GetBytes("pages", "/article-one"); ok {
-	fmt.Println(string(d))
-} else {
-	fmt.Println("article not found in cache")
+// retrieve a cache item
+b, ok := c.GetBytes("foo")
+if !ok {
+	log.Println("failed to get cache item")
+	return
 }
 ```
 

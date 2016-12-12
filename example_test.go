@@ -38,6 +38,24 @@ func Example() {
 	// Item from the cache: bar.
 }
 
+func Example_keyspaces() {
+	c := forget.NewCacheSpaces(forget.Options{CacheSize: 1 << 9, ChunkSize: 1 << 6})
+	defer c.Close()
+
+	c.SetBytes("pages", "/home", []byte("Hello, world!"), time.Minute)
+	c.SetBytes("pages", "/article-one", []byte("This is cached."), time.Minute)
+	c.SetBytes("ajax-data", "/api/site-index", []byte(`{"data": 42}`), 12*time.Minute)
+
+	if d, ok := c.GetBytes("pages", "/article-one"); ok {
+		fmt.Println(string(d))
+	} else {
+		fmt.Println("article not found in cache")
+	}
+
+	// Output:
+	// This is cached.
+}
+
 func Example_io() {
 	c := forget.New(forget.Options{CacheSize: 1 << 20, ChunkSize: 1 << 10})
 	defer c.Close()
