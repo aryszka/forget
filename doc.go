@@ -4,7 +4,7 @@ Package forget provides an in-memory cache for arbitrary, binary data.
 Caching
 
 The cache identifies items by their keys. It stores them with individual expiration time (TTL). The associated
-content is stored in binary format.  Storing a new item with the same key, overrides the previous one A cached
+content is stored in binary format.  Storing a new item with the same key, overrides the previous one. A cached
 item can be retrieved or deleted with its key. As a special use case, it is possible to store only keys, where
 the useful information is whether a key exists or not. If a new item doesn't fit in the free space, the least
 recently used item is evicted (LRU).
