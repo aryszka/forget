@@ -3,15 +3,15 @@ Package forget provides an in-memory cache for arbitrary, binary data.
 
 Caching
 
-The cache identifies cached items by their key. Items to be stored are provided with their key, individually
-selected expiration time (TTL), and binary data. Storing an item with the same key, overrides the TTL and the
-previous one. A cached item can be retrieved or deleted with its key. As a special use case, it is possible to
-store only keys, where the useful information is whether a key exists, and whether it has expired. If a new item
-doesn't fit in the free space, the least recently used item is evicted (LRU).
+The cache identifies items by their keys. It stores them with individual expiration time (TTL). The associated
+content is stored in binary format.  Storing a new item with the same key, overrides the previous one A cached
+item can be retrieved or deleted with its key. As a special use case, it is possible to store only keys, where
+the useful information is whether a key exists or not. If a new item doesn't fit in the free space, the least
+recently used item is evicted (LRU).
 
 Keyspaces
 
-Keyspaces, when used (see NewCacheSpaces()), allow the optimization for the LRU eviction mechanism. Items that
+Keyspaces, when used (see NewCacheSpaces()), allow some optimization of the LRU eviction mechanism. Items that
 are more expensive to produce but less frequently accessed than others, can be stored in different keyspaces.
 When eviction is required, the cache tries to evict enough items from the same keyspace as the one currently
 being filled. When using keyspaces, the same key can appear in different keyspaces pointing to different items.
@@ -41,8 +41,8 @@ was written, or returns with EOF once the write was finished.
 While writing an item, chunks are continuously assigned to the item from the free range of allocated memory. If
 there are no free chunks, the cache evicts enough of the least recently used items. The cache doesn't evict
 those items that are currently being read by an unclosed reader. Similarly, when deleting an item or overwriting
-one, while it has active readers associated with it, the item is only marked for delete, but the active readers
-can finish reading from it.
+one, if it has active readers associated with it, the item is only marked for delete, but the active readers can
+finish reading from it.
 
 Monitoring
 
