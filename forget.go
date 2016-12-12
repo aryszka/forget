@@ -104,7 +104,8 @@ func (c *Cache) GetKey(key string) bool {
 // GetBytes retrieves an item from the cache with a key. If found, the second
 // return argument will be true, otherwise false.
 //
-// It is equivalent to calling Get, copying the reader to the end and closing the reader.
+// It is equivalent to calling Get, copying the reader to the end and closing the reader. It is safe to modify
+// the returned buffer.
 func (c *Cache) GetBytes(key string) ([]byte, bool) {
 	return c.spaces.GetBytes("", key)
 }
@@ -126,7 +127,8 @@ func (c *Cache) SetKey(key string, ttl time.Duration) bool {
 
 // SetBytes sets an item in the cache with a key.
 //
-// It is equivalent to calling Set, writing the complete data to the item and closing the writer.
+// It is equivalent to calling Set, writing the complete data to the item and closing the writer. It is safe to
+// modify the buffer after SetBytes returned.
 func (c *Cache) SetBytes(key string, data []byte, ttl time.Duration) bool {
 	return c.spaces.SetBytes("", key, data, ttl)
 }

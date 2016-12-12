@@ -9,6 +9,66 @@ import (
 	"testing"
 	"time"
 )
+/*
+interface:
+* basic get/set/delete
+* keyspaces
+* single space
+* basic stats
+- err cache closed
+- not found
+- same id, different keyspace
+
+memory:
+* different data layouts: key store, equal items, mixed items
+* segments
+* ownership when GetBytes/SetBytes
+- default cache size and default chunk size applied (slow)
+- maximum item size applied
+
+caching:
+* ttl
+* lru
+* keyspaces
+
+io:
+* read/seek/write
+* item protection
+* blocking
+- err item discarded
+- err write limit
+- err reader closed
+- err writer closed
+- err invalid seek offset
+- closing the reader
+- closing the writer
+- reader blocking
+- seek offset boundaries
+- seeking when write incomplete/complete
+- writer blocking
+- allocating on write
+
+concurrency:
+* basic operations
+* io
+* segments
+
+stats:
+* stats
+* notifications
+* notification masks
+* segments
+* keyspaces
+- avalable memory
+- keyspace summing
+- keyspace and key in events
+- size change in events
+- predefined masks
+- event type string
+- reader count, writer count
+- marked for delete
+- writers blocked
+*/
 
 type (
 	testKeyspace map[string][]byte
