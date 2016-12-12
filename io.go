@@ -258,6 +258,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 			// only for statistics
 			if blocked {
 				w.segment.stats.decWritersBlocked(w.item.keyspace)
+				blocked = false
 			}
 
 			if w.item.writeComplete {
