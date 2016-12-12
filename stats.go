@@ -2,8 +2,8 @@ package forget
 
 import "strings"
 
-// EventType indicates the nature of a notification event. It is also used to maske which events should trigger
-// a notification.
+// EventType indicates the nature of a notification event. It is also used to mask which events should trigger a
+// notification.
 type EventType int
 
 const (
@@ -17,13 +17,15 @@ const (
 	// Set events are sent when a cache item was stored.
 	Set
 
-	// Delete events are sent when a cache item was deleted (explicitly calling Delete() or overwritten by Set()).
+	// Delete events are sent when a cache item was deleted (explicitly calling Delete() or overwritten by
+	// Set(), or as part of eviction caused by a Write() operation on an item).
 	Delete
 
 	// WriteComplete events are sent when a cache item's write is finished.
 	WriteComplete
 
-	// Expire events are sent when a cache item was detected to be expired. Always together with Delete and Miss.
+	// Expire events are sent when a cache item was detected to be expired. Always together with Miss, and
+	// if delete is not blocked due to active readers, also with Delete.
 	Expire
 
 	// Evict events are sent when a cache item was evicted from the cache. Always together with Delete.
@@ -48,7 +50,7 @@ type Event struct {
 	// Type indicates the reason of the event.
 	Type EventType
 
-	// Keyspace contains the keyspace of the item if an event is related to a single item.
+	// Keyspace contains the keyspace if an event can be related to one.
 	Keyspace string
 
 	// Key contains the key of the item if an event is related to a single item.
@@ -67,7 +69,7 @@ type notify struct {
 	listener chan<- *Event
 }
 
-// Stats objects contain cache statistics about keyspaces, internal cache segments or the complete cache.
+// Stats objects contain cache statistics the cache and keyspaces.
 type Stats struct {
 
 	// ItemCount indicates the number of stored items.
@@ -102,20 +104,20 @@ type segmentStats struct {
 	notify          *notify
 }
 
-// CacheStats objects contain statistics about the cache, including the internal cache instnaces and keyspaces.
+// CacheStats objects contain statistics about the cache including the keyspaces.
 type CacheStats struct {
 
-	// Total contains statistics the cache.
+	// Total contains statistics about the cache.
 	Total *Stats
 
-	// AvailableMemory tells how many memory is available in the cache for new items or further writing.
+	// AvailableMemory tells how much memory is available in the cache for new items or for further writing.
 	AvailableMemory int
 
 	// Keyspaces contain statistics split by keyspaces in the cache.
 	Keyspaces map[string]*Stats
 }
 
-// String returns the string representation of an EventType value, listing all the set flags.
+// String returns the string representation of an EventType value, listing all the flags that are set.
 func (et EventType) String() string {
 	switch et {
 	case Hit:
@@ -154,11 +156,6 @@ func (et EventType) String() string {
 	}
 }
 
-// Is checks if one or more EventType flags are set.
-func (et EventType) Is(test EventType) bool {
-	return et&test != 0
-}
-
 func newNotify(listener chan<- *Event, mask EventType) *notify {
 	return &notify{
 		listener: listener,
@@ -168,7 +165,7 @@ func newNotify(listener chan<- *Event, mask EventType) *notify {
 
 // forwards an event if it matches the mask
 func (n *notify) send(i *Event) {
-	if i.Type.Is(n.mask) {
+	if i.Type&n.mask != 0 {
 		n.listener <- i
 	}
 }

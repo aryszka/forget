@@ -23,7 +23,7 @@ func (c *chunk) setPrev(p node) { c.prevChunk = p }
 func (c *chunk) setNext(n node) { c.nextChunk = n }
 
 // checks if each byte in a slice equals to the bytes in the chunk. If p contains more bytes than the chunk
-// after offset, those are ignored
+// after the offset, those are ignored
 func (c *chunk) bytesEqual(offset int, p []byte) (bool, int) {
 	available := len(c.data) - offset
 	if len(p) > available {
@@ -33,19 +33,19 @@ func (c *chunk) bytesEqual(offset int, p []byte) (bool, int) {
 	return bytes.Equal(p, c.data[offset:offset+len(p)]), len(p)
 }
 
-// reads bytes to p from offset in the chunk. Whichever of p or the chunk contains less bytes than the
+// reads bytes to p from the offset in the chunk. Whichever of p or the chunk contains less bytes than the
 // other, the rest of the other is ignored
 func (c *chunk) read(offset int, p []byte) int {
 	return copy(p, c.data[offset:])
 }
 
-// reads bytes from p ot the chunk with offset. Whichever of p or the chunk contains less bytes than the
+// writes bytes from p to the chunk with the offset. Whichever of p or the chunk contains less bytes than the
 // other, the rest of the other is ignored
 func (c *chunk) write(offset int, p []byte) int {
 	return copy(c.data[offset:], p)
 }
 
-// allocates all the memory used by a cache segment
+// preallocates all the memory used by a cache segment
 func newMemory(chunkCount, chunkSize int) *memory {
 	m := &memory{
 		chunkCount: chunkCount,
@@ -61,7 +61,7 @@ func newMemory(chunkCount, chunkSize int) *memory {
 	return m
 }
 
-// returns a free chunk if any and moves the free chunk marker to the next one
+// returns a free chunk if there is any and moves the free chunk marker to the next one
 func (m *memory) allocate() (*chunk, bool) {
 	if c, ok := m.firstFree.(*chunk); ok {
 		m.firstFree = c.next()
@@ -71,7 +71,7 @@ func (m *memory) allocate() (*chunk, bool) {
 	return nil, false
 }
 
-// moves a chunk to new position
+// moves a chunk to a new position
 func (m *memory) move(c *chunk, before node) {
 	m.chunks.move(c, before)
 }

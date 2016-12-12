@@ -25,7 +25,7 @@ var (
 	ErrCacheClosed = errors.New("cache closed")
 )
 
-func newCache(chunkCount, chunkSize int, notify *notify) *segment {
+func newSegment(chunkCount, chunkSize int, notify *notify) *segment {
 	return &segment{
 		mx:           &sync.RWMutex{},
 		readDoneCond: sync.NewCond(&sync.Mutex{}),
@@ -60,6 +60,7 @@ func (s *segment) addLookup(hash uint64, i *item) {
 	s.itemLookup[index] = append(s.itemLookup[index], i)
 }
 
+// deletes the lookup entry of an item
 func (s *segment) deleteLookup(i *item) {
 	bi := s.bucketIndex(i.hash)
 	bucket := s.itemLookup[bi]
@@ -91,6 +92,7 @@ func (s *segment) removeKeyspaceLRU(lru *list, keyspace string) {
 	s.lruRotate.remove(lru)
 }
 
+// deletes an item from an LRU list
 func (s *segment) deleteFromLRU(i *item) {
 	lru := s.lruLookup[i.keyspace]
 	lru.remove(i)
@@ -99,10 +101,12 @@ func (s *segment) deleteFromLRU(i *item) {
 	}
 }
 
+// checks if an item can be deleted immediately or needs to be marked for delete
 func canDelete(i *item) bool {
 	return !i.writeComplete || i.readers == 0
 }
 
+// releases the memory used by an item
 func (s *segment) freeMemory(i *item) {
 	first, last := i.data()
 	if first != nil {
@@ -110,6 +114,7 @@ func (s *segment) freeMemory(i *item) {
 	}
 }
 
+// deletes an item or marks it for delete
 func (s *segment) deleteItem(i *item) bool {
 	s.deleteLookup(i)
 	s.deleteFromLRU(i)
@@ -124,10 +129,12 @@ func (s *segment) deleteItem(i *item) bool {
 	return false
 }
 
+// checks if an item can be evicted
 func canEvict(i *item) bool {
 	return i.size > 0 && (!i.writeComplete || i.readers == 0)
 }
 
+// evicts one item from the items marked for delete if possible
 func (s *segment) evictFromDeleted() bool {
 	current := s.deleteQueue.first
 	for current != nil {
@@ -151,10 +158,7 @@ func (s *segment) evictFromDeleted() bool {
 	return false
 }
 
-// tries to evict one item from an lru list, other than the one in the args, with a size greater than 0 and has
-// no active readers.
-//
-// TODO: this is not very self documenting. Current readers is checked but not writeComplete.
+// tries to evict one item from an lru list, other than the one in the args
 func (s *segment) evictFromLRU(lru *list, skip *item) (*item, bool) {
 	current := lru.first
 	for current != nil {
@@ -175,6 +179,7 @@ func (s *segment) evictFromLRU(lru *list, skip *item) (*item, bool) {
 	return nil, false
 }
 
+// tries to evict one item from its own keyspace, other than the one in the args
 func (s *segment) evictFromOwnKeyspace(i *item) bool {
 	keyspaceLRU, ok := s.lruLookup[i.keyspace]
 	if !ok {
@@ -191,7 +196,7 @@ func (s *segment) evictFromOwnKeyspace(i *item) bool {
 	return true
 }
 
-// round-robin over the rest of the LRUs to evict one item
+// round-robin over the rest of the LRUs to evict one item, other than the item's own LRU, to evict one item
 func (s *segment) evictFromOtherKeyspaces(i *item) bool {
 	own := s.lruLookup[i.keyspace]
 	lru, _ := s.lruRotate.first.(*list)
@@ -223,7 +228,7 @@ func (s *segment) evictFromOtherKeyspaces(i *item) bool {
 	return false
 }
 
-// tries to evict one item, other than the one in the args. First tries from the temporary deleted items,
+// tries to evict one item, other than the one in the args. First tries from the items marked for delete,
 // checking if no reader is blocking them anymore. Next tries in the item's own keyspace. Last tries all other
 // keyspaces in a round-robin fashion
 func (s *segment) evictForItem(i *item) bool {
@@ -316,9 +321,9 @@ func (s *segment) writeKey(i *item, key string) error {
 	return nil
 }
 
-// tries to create a new item. If one exists with the same keyspace and key, it deletes it. Stores the item in
-// the lookup table and the LRU list of the keyspace. If memory cannot be allocated for the item key due to
-// active readers holding too many existing items, it fails
+// tries to create a new item. If one exists with the same keyspace and key, it deletes it first. Stores the
+// item in the lookup table and the LRU list of the keyspace. If memory cannot be allocated for the item key due
+// to active readers holding too many existing items, it fails
 func (s *segment) trySet(hash uint64, keyspace, key string, ttl time.Duration) (*Writer, error) {
 	s.mx.Lock()
 	defer s.mx.Unlock()

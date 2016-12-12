@@ -53,3 +53,4 @@ lint: $(SOURCES)
 	golint -set_exit_status -min_confidence 0.9
 
 precommit: build check fmt cover vet check-cyclo check-ineffassign check-spell lint
+	# ok

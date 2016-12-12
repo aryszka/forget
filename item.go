@@ -74,7 +74,7 @@ func (i *item) keyEquals(key string) bool {
 	return len(p) == 0
 }
 
-// writes from the last used chunk position of the last chunk, maximum to the end of the chunk.
+// writes from the last used chunk position of the last chunk, maximum to the end of the chunk
 func (i *item) write(p []byte) (int, error) {
 	if i.discarded {
 		return 0, ErrItemDiscarded

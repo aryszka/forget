@@ -17,7 +17,7 @@ const (
 	DefaultChunkSize = 1 << 15
 )
 
-// Options objects are used to pass in parameters to new Cache segments.
+// Options objects are used to pass in parameters to new Cache instances.
 type Options struct {
 
 	// CacheSize defines the size of the cache.
@@ -28,8 +28,8 @@ type Options struct {
 
 	// Notify is used by the cache to send notifications about internal events. When nil, no notifications are
 	// sent. It is recommended to use a channel with a small buffer, e.g. 2. Make sure that the channel is
-	// consumed when set. Be aware that when the channel is not nil, and the mask is 0, the default mask is
-	// applied.
+	// continuously consumed when set. Be aware that when the channel is not nil, and the mask is 0, the
+	// default mask is applied.
 	Notify chan<- *Event
 
 	// NotifyMask can be used to select which event types should trigger a notification. The default is Normal,
@@ -48,7 +48,7 @@ type Cache struct {
 
 // CacheSpaces is equivalent to Cache but it supports multiple keyspaces. Keyspaces are used to identify cache
 // items in addition to the keys. Internally, when the cache is full, the cache tries to evict items first from
-// the same keyspace as the item requiring more space.
+// the same keyspace as the item currently requiring more space.
 type CacheSpaces struct {
 	options     Options
 	maxItemSize int
@@ -58,7 +58,7 @@ type CacheSpaces struct {
 // New initializes a cache.
 //
 // Forget creates internally multiple independent cache segments, as many as the maximum of the reported CPU
-// cores or the GOMAXPROCS value. These segments can be accessed in parallel without synchronization. This
+// cores or the GOMAXPROCS value. These segments can be accessed in parallel without synchronization cost. This
 // internal split of the cache affects the maximum size of a single item: ~ CacheSize / NumCPU.
 func New(o Options) *Cache {
 	return &Cache{spaces: NewCacheSpaces(o)}
@@ -68,8 +68,9 @@ func New(o Options) *Cache {
 // Reading can start before writing to the item was finished. The reader blocks if the read reaches the point
 // that the writer didn't pass yet. If the write finished, and the reader reaches the end of the item, EOF is
 // returned. The reader returns ErrCacheClosed if the cache was closed and ErrItemDiscarded if the original item
-// with the given key is not available anymore. The reader must be closed after the read was finished.
-func (c *Cache) Get(key string) (io.ReadCloser, bool) {
+// with the given key is not available anymore. The reader must be closed after the read was finished. All
+// methods of the returned reader are thread safe.
+func (c *Cache) Get(key string) (*Reader, bool) {
 	return c.spaces.Get("", key)
 }
 
@@ -91,7 +92,7 @@ func (c *Cache) GetBytes(key string) ([]byte, bool) {
 // Set creates a cache item and returns a writer that can be used to store the associated data. The writer
 // returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item reaches the
 // maximum item size of the cache. The writer must be closed to indicate that no more data will be written to
-// the item.
+// the item. All methods of the returned writer are thread safe.
 func (c *Cache) Set(key string, ttl time.Duration) (io.WriteCloser, bool) {
 	return c.spaces.Set("", key, ttl)
 }
@@ -120,7 +121,7 @@ func (c *Cache) Stats() *CacheStats {
 	return c.spaces.Stats()
 }
 
-// Close shuts down the cache and releases resource.
+// Close shuts down the cache and releases resources.
 func (c *Cache) Close() { c.spaces.Close() }
 
 // NewCacheSpaces is like New() but initializes a cache that supports keyspaces.
@@ -139,20 +140,25 @@ func NewCacheSpaces(o Options) *CacheSpaces {
 		o.NotifyMask = Normal
 	}
 
+	notify := newNotify(o.Notify, o.NotifyMask)
+
 	if o.hashing == nil {
 		o.hashing = fnv.New64a
 	}
 
 	segmentCount := o.maxSegmentCount
+
 	if segmentCount <= 0 {
 		segmentCount = runtime.NumCPU()
-		if segmentCount > runtime.GOMAXPROCS(-1) {
-			segmentCount = runtime.GOMAXPROCS(-1)
-		}
+	}
+
+	if segmentCount > runtime.GOMAXPROCS(-1) {
+		segmentCount = runtime.GOMAXPROCS(-1)
 	}
 
 	segmentSize := o.CacheSize / segmentCount
 	segmentSize -= segmentSize % o.ChunkSize
+
 	chunkCount := segmentSize / o.ChunkSize
 	if chunkCount == 0 {
 		segmentCount = 1
@@ -160,10 +166,9 @@ func NewCacheSpaces(o Options) *CacheSpaces {
 		segmentSize = chunkCount * o.ChunkSize
 	}
 
-	n := newNotify(o.Notify, o.NotifyMask)
 	segments := make([]*segment, segmentCount)
 	for i := range segments {
-		segments[i] = newCache(chunkCount, o.ChunkSize, n)
+		segments[i] = newSegment(chunkCount, o.ChunkSize, notify)
 	}
 
 	return &CacheSpaces{
@@ -180,7 +185,7 @@ func (c *CacheSpaces) hash(key string) uint64 {
 }
 
 func (c *CacheSpaces) getSegment(hash uint64) *segment {
-	// take the cache segment based on the middle of the key hash
+	// fnv: take the cache segment based on the middle of the key hash
 	return c.segments[int(hash>>32)%len(c.segments)]
 }
 

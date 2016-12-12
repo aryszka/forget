@@ -1530,7 +1530,7 @@ func TestNotifyMaskDefaultsToNormal(t *testing.T) {
 	c.SetBytes("s1", "foo", []byte{1, 2, 3}, time.Hour)
 	c.SetBytes("s1", "bar", []byte{1, 2, 3}, time.Hour)
 	e := <-n
-	if !e.Type.Is(Evict) {
+	if e.Type&Evict == 0 {
 		t.Error("failed to set mask")
 	}
 }
@@ -2075,7 +2075,7 @@ func TestSeekFromEnd(t *testing.T) {
 		r, _ := c.Get("s1", "foo")
 		defer r.Close()
 
-		if offset, err := r.Seek(4, io.SeekEnd); err != nil || offset != 11 {
+		if offset, err := r.Seek(-4, io.SeekEnd); err != nil || offset != 11 {
 			t.Error("seek failed", offset, err)
 			return
 		}
@@ -2098,7 +2098,7 @@ func TestSeekFromEnd(t *testing.T) {
 		r, _ := c.Get("s1", "foo")
 		defer r.Close()
 
-		if _, err := r.Seek(2, io.SeekEnd); err != ErrInvalidSeekOffset {
+		if _, err := r.Seek(-2, io.SeekEnd); err != ErrInvalidSeekOffset {
 			t.Error("seek failed to fail", err)
 			return
 		}

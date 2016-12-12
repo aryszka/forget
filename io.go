@@ -43,12 +43,14 @@ var (
 	errWaitingForWrite = errors.New("waiting for write")
 )
 
+// returns the chunk index and the chunk offset based on a global offset and the current chunk size
 func (c *cacheIO) offsetToChunks(offset int) (int, int) {
 	chunkIndex := offset / c.segment.memory.chunkSize
 	chunkOffset := offset % c.segment.memory.chunkSize
 	return chunkIndex, chunkOffset
 }
 
+// creates a reader and seeks to end of the key
 func newReader(s *segment, i *item) *Reader {
 	r := &Reader{cacheIO: &cacheIO{segment: s, item: i}}
 	chunkIndex, chunkOffset := r.offsetToChunks(i.keySize)
@@ -56,10 +58,10 @@ func newReader(s *segment, i *item) *Reader {
 	return r
 }
 
-// reads from the item's current underlying chunk once at the current chunk position. If reached the end of
-// the chunk, it steps first to the next chunk and resets the chunk position. If reached end of the item
-// and the write to the item is complete, returns EOF, if reached the end but the item is still being written,
-// returns nil
+// reads from the item's current underlying current chunk once at the current chunk position. If reached the end
+// of the chunk, it steps first to the next chunk and resets the chunk position. If reached the end of the item
+// and the write to the item is complete, returns EOF. If reached the end, but the item is still being written,
+// it returns nil
 func (r *Reader) readOne(p []byte) (int, error) {
 	r.segment.mx.RLock()
 	defer r.segment.mx.RUnlock()
@@ -120,10 +122,12 @@ func (r *Reader) Read(p []byte) (int, error) {
 	return count, nil
 }
 
+// returns the current offset not counting the key
 func (r *Reader) currentOffset() int64 {
 	return int64(r.chunkIndex*r.segment.memory.chunkSize + r.chunkOffset - r.item.keySize)
 }
 
+// steps the current chunk by chunkIndex - fromIndex and sets the chunkOffset
 func (r *Reader) seekChunks(from node, fromIndex, chunkIndex, chunkOffset int) {
 	for fromIndex != chunkIndex {
 		if fromIndex < chunkIndex {
@@ -140,6 +144,9 @@ func (r *Reader) seekChunks(from node, fromIndex, chunkIndex, chunkOffset int) {
 	r.chunkOffset = chunkOffset
 }
 
+// seeks the item's current underlying current chunk and chunk index once. If reached the end of the item and
+// the write to the item is complete, returns EOF. If reached the end, but the item is still being written, it
+// returns errWaitingForWrite
 func (r *Reader) seekOne(offset int64, whence int) (int64, error) {
 	r.segment.mx.RLock()
 	defer r.segment.mx.RUnlock()
@@ -154,7 +161,7 @@ func (r *Reader) seekOne(offset int64, whence int) (int64, error) {
 			return r.currentOffset(), ErrInvalidSeekOffset
 		}
 
-		to = r.item.size - to
+		to += r.item.size
 	default:
 		to += r.item.keySize
 	}
@@ -217,8 +224,9 @@ func (r *Reader) Seek(offset int64, whence int) (int64, error) {
 	}
 }
 
-// Close releases the reader. When there items marked internally for delete and no more readers are attached to
-// them, those items will be deleted at the time of the next cache eviction of the same segment.
+// Close releases the reader. When there are items marked internally for delete, and no more readers are
+// attached to them, those items will become available for delete at the time of the next cache eviction of the
+// same segment.
 func (r *Reader) Close() error {
 	defer r.segment.readDoneCond.Broadcast()
 
@@ -311,8 +319,8 @@ func (w *Writer) Write(p []byte) (int, error) {
 	return count, nil
 }
 
-// Close releases the writer signalling write done internally. Readers, that attached to the same cache
-// item and blocked by trying to read beyond the available item size, return at this point.
+// Close releases the writer signaling write done internally. Readers, that attached to the same cache item and
+// blocked by trying to read beyond the available item size, get unblocked at this point.
 func (w *Writer) Close() error {
 	defer w.item.writeCond.Broadcast()
 
