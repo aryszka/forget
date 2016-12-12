@@ -14,7 +14,7 @@ data:
 - allocates the predefined maximum used memory in advance, on startup;
 - supports streaming style read/write IO, with seeking and immediate read access to items being filled;
 - protects busy items from delete, reset and eviction;
-- all operations are ready for concurrent access, and, as much as possible, accessible in parallel;
+- all its operations are ready for concurrent access, and, as much as possible, accessible in parallel;
 - supports monitoring with detailed statistics and continuous notifications;
 
 ### Documentation:

@@ -42,10 +42,12 @@ func Example_keyspaces() {
 	c := forget.NewCacheSpaces(forget.Options{CacheSize: 1 << 9, ChunkSize: 1 << 6})
 	defer c.Close()
 
+	// store items with different keyspaces
 	c.SetBytes("pages", "/home", []byte("Hello, world!"), time.Minute)
 	c.SetBytes("pages", "/article-one", []byte("This is cached."), time.Minute)
-	c.SetBytes("ajax-data", "/api/site-index", []byte(`{"data": 42}`), 12*time.Minute)
+	c.SetBytes("ajax-data", "/article-one", []byte(`{"data": 42}`), 12*time.Minute)
 
+	// retrieve an item
 	if d, ok := c.GetBytes("pages", "/article-one"); ok {
 		fmt.Println(string(d))
 	} else {
