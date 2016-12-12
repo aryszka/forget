@@ -243,9 +243,12 @@ func (w *Writer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	var count int
+	var (
+		count   int
+		blocked bool
+	)
+
 	for len(p) > 0 {
-		var blocked bool
 		err := func() error {
 			defer w.item.writeCond.Broadcast()
 

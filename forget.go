@@ -41,8 +41,7 @@ type Options struct {
 	maxSegmentCount int
 }
 
-// Cache provides an in-memory cache for arbitrary binary data identified by keys. All methods of
-// a Cache object are thread safe.
+// Cache provides an in-memory cache for arbitrary binary data identified by keys.
 type Cache struct {
 	spaces *CacheSpaces
 }
@@ -90,8 +89,7 @@ func New(o Options) *Cache {
 // Reading can start before writing to the item was finished. The reader blocks if the read reaches the point
 // that the writer didn't pass yet. If the write finished, and the reader reaches the end of the item, EOF is
 // returned. The reader returns ErrCacheClosed if the cache was closed and ErrItemDiscarded if the original item
-// with the given key is not available anymore. The reader must be closed after the read was finished. All
-// methods of the returned reader are thread safe.
+// with the given key is not available anymore. The reader must be closed after the read was finished.
 func (c *Cache) Get(key string) (*Reader, bool) {
 	return c.spaces.Get("", key)
 }
@@ -114,7 +112,7 @@ func (c *Cache) GetBytes(key string) ([]byte, bool) {
 // Set creates a cache item and returns a writer that can be used to store the associated data. The writer
 // returns ErrItemDiscarded if the item is not available anymore, and ErrWriteLimit if the item reaches the
 // maximum item size of the cache. The writer must be closed to indicate that no more data will be written to
-// the item. All methods of the returned writer are thread safe.
+// the item.
 func (c *Cache) Set(key string, ttl time.Duration) (io.WriteCloser, bool) {
 	return c.spaces.Set("", key, ttl)
 }
