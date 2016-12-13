@@ -9,10 +9,10 @@ data:
 
 - supports use cases with different characteristics: key store, cache for small and large binary data;
 - has a simple get/set/delete interface;
+- supports streaming style read/write IO, with seeking and immediate read access to items being filled;
 - implements TTL based expiration;
 - implements LRU style eviction optimized with keyspaces;
 - allocates the predefined maximum used memory in advance, on startup;
-- supports streaming style read/write IO, with seeking and immediate read access to items being filled;
 - protects busy items from delete, reset and eviction;
 - all its operations are ready for concurrent access, and, as much as possible, accessible in parallel;
 - supports monitoring with detailed statistics and continuous notifications;
