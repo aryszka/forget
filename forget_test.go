@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 )
+
 /*
 interface:
 * basic get/set/delete
@@ -18,6 +19,7 @@ interface:
 - err cache closed
 - not found
 - same id, different keyspace
+- get/set/del on closed channel
 
 memory:
 * different data layouts: key store, equal items, mixed items
@@ -25,6 +27,7 @@ memory:
 * ownership when GetBytes/SetBytes
 - default cache size and default chunk size applied (slow)
 - maximum item size applied
+- close releases the memory
 
 caching:
 * ttl
@@ -59,7 +62,7 @@ stats:
 * notification masks
 * segments
 * keyspaces
-- avalable memory
+- available memory
 - keyspace summing
 - keyspace and key in events
 - size change in events

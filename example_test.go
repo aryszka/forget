@@ -111,9 +111,9 @@ func Example_io() {
 
 func Example_proxyfill() {
 	// The following example shows a backend server and a caching proxy in front of it. The backend produces
-	// an expensive resource. The proxy caches it, it prevents multiple requests reaching the backend in
-	// case of a cache miss, and serves any data to multiple clients in parallel as soon as it is available.
-	// (See the order of the output.)
+	// an expensive resource. The proxy caches it, prevents multiple requests reaching the backend in case
+	// of a cache miss, and serves any data to multiple clients in parallel as soon as it is available. (See
+	// the order of the output.)
 
 	// create a test backend server
 	testContent := []byte{1, 2, 3}
