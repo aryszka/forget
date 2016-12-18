@@ -1474,7 +1474,13 @@ func TestNotifications(t *testing.T) {
 		t.Run(msg, func(t *testing.T) {
 			n := make(chan *Event, 4)
 
-			c := NewCacheSpaces(Options{CacheSize: 6, ChunkSize: 3, Notify: n, NotifyMask: All})
+			c := NewCacheSpaces(Options{
+				CacheSize:       6,
+				ChunkSize:       3,
+				Notify:          n,
+				NotifyMask:      All,
+				maxSegmentCount: 1,
+			})
 			defer c.Close()
 
 			for _, fi := range f[:len(f)-1] {
@@ -2243,4 +2249,27 @@ func TestSeekBeyondEnd(t *testing.T) {
 			t.Error("failed to read", err, n, p[:n])
 		}
 	})
+}
+
+func TestInvalidCacheSizeOptions(t *testing.T) {
+	c := New(Options{CacheSize: 12, ChunkSize: 64})
+	defer c.Close()
+
+	c.Get("foo")
+
+	w, ok := c.Set("foo", time.Hour)
+	if !ok {
+		t.Error("failed to set item")
+		return
+	}
+
+	if _, err := w.Write([]byte{1, 2, 3, 4, 5, 6}); err != nil {
+		t.Error("failed to fill item", err)
+	}
+
+	w.Close()
+
+	if b, ok := c.GetBytes("foo"); !ok || !bytes.Equal(b, []byte{1, 2, 3, 4, 5, 6}) {
+		t.Error("failed to retrieve item from cache", ok, b)
+	}
 }

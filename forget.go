@@ -183,9 +183,8 @@ func NewCacheSpaces(o Options) *CacheSpaces {
 
 	chunkCount := segmentSize / o.ChunkSize
 	if chunkCount == 0 {
-		segmentCount = 1
-		chunkCount = o.CacheSize / o.ChunkSize
-		segmentSize = chunkCount * o.ChunkSize
+		segmentSize = o.ChunkSize
+		chunkCount = 1
 	}
 
 	segments := make([]*segment, segmentCount)
