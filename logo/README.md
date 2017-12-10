@@ -1,12 +1,12 @@
-# The forget logo
+# The Forget logo
  
-<img src="logo.png" alt="forget" width="495" height="260">
+<img src="logo.png" alt="forget" width="500" height="500">
 
 # Credits
 
-The forget logo was designed by [Nadya Kuzmina](http://nadyakuzmina.com/).  
+The Forget logo was designed by [Nadya Kuzmina](http://nadyakuzmina.com/).  
 
 # License
 
-The forget logo is licensed under CC0, waiving all copyright.  
+The Forget logo is licensed under CC0, waiving all copyright.  
 [Read the license.](../LICENSE-logo.md)
