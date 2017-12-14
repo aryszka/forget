@@ -57,7 +57,7 @@ type CacheSpaces struct {
 
 var (
 	// ErrItemDiscarded is returned by IO operations when an item has been discarded, e.g. evicted, deleted or
-	// the discarded due to the cache was closed.
+	// discarded due to the cache was closed.
 	ErrItemDiscarded = errors.New("item discarded")
 
 	// ErrWriteLimit is returned when writing to an item fills the available size.
