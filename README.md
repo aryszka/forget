@@ -1,8 +1,8 @@
+<h1><img width="360" alt="Forget" src="https://rawgithub.com/aryszka/forget/master/logo/logo.svg"></h1>
+
 [![GoDoc](https://godoc.org/github.com/aryszka/forget?status.svg)](https://godoc.org/github.com/aryszka/forget)
 [![Go Report Card](https://goreportcard.com/badge/github.com/aryszka/forget)](https://goreportcard.com/report/github.com/aryszka/forget)
 [![Go Cover](https://gocover.io/_badge/github.com/aryszka/forget)](https://gocover.io/github.com/aryszka/forget)
-
-# Forget
 
 Forget is a Go library for in-memory caching. It can be used as a safe, in-process cache for storing binary
 data:
