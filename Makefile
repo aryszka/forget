@@ -4,6 +4,12 @@ SOURCES = $(shell find . -name '*.go')
 
 default: build
 
+deps:
+	go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.3.1
+	go install github.com/gordonklaus/ineffassign@latest
+	go install github.com/client9/misspell/cmd/misspell@v0.3.4
+	go install golang.org/x/lint/golint@latest
+
 build: $(SOURCES)
 	go build
 

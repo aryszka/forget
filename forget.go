@@ -304,26 +304,3 @@ func (c *CacheSpaces) Close() {
 		s.close()
 	}
 }
-
-// docs
-// - document write cancellable with delete for cancelling cache filling
-// - emphasize parallel io better in the package docs, multiple readers
-// tests:
-// - delete not tested
-// - tests based on the documentation
-// - tests based on the code
-// - more combined io tests (buffer sizes, chunk borders, event orders)
-// - fuzzy testing
-// - scenario testing
-// - why the drop at 100k items
-// - check stats, utilization
-// - verify if the notifications decrease the performance, and rather use builtin counters instead
-// set results into error
-// get or set
-// close and delete
-// ready
-// write complete check in seek direction decision?
-// expvar package
-// http package
-// check kubernetes events for what they use for storage
-// buckets can leak
